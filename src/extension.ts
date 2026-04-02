@@ -1,7 +1,13 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { extractApiPath, getApiPathAtPosition, normalizePath } from './editorPathExtract';
+import {
+  extractApiPath,
+  getApiPathAtPosition,
+  isAppRouterFile,
+  normalizePath
+} from './editorPathExtract';
 import { findRouteForPath } from './nodeRouteResolve';
+import { resolveRouterDirectHandler } from './routerCursor';
 
 const DEFINITION_SELECTOR: vscode.DocumentSelector = [
   { scheme: 'file', language: 'typescript' },
@@ -27,6 +33,15 @@ export function activate(context: vscode.ExtensionContext): void {
     DEFINITION_SELECTOR,
     {
       async provideDefinition(document, position, token) {
+        const direct = await resolveRouterDirectHandler(
+          document,
+          position,
+          token
+        );
+        if (direct) {
+          return [direct];
+        }
+
         const hit = getApiPathAtPosition(document, position);
         if (!hit) {
           return null;
@@ -73,7 +88,10 @@ export function activate(context: vscode.ExtensionContext): void {
         apiPath = normalizePath(apiPath);
       }
 
-      if (!apiPath.startsWith('/v2/')) {
+      const skipV2Warning =
+        apiPath.startsWith('/wscump/') ||
+        (editor && isAppRouterFile(editor.document));
+      if (!apiPath.startsWith('/v2/') && !skipV2Warning) {
         const ok = await vscode.window.showWarningMessage(
           '路径通常以 /v2/ 开头，是否继续查找？',
           '继续',

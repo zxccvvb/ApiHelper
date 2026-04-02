@@ -1,5 +1,11 @@
 import * as vscode from 'vscode';
 
+/** 是否为本项目 BFF 路由表文件（用于 /wscump/... 等路径的「转到定义」） */
+export function isAppRouterFile(doc: vscode.TextDocument): boolean {
+  const p = doc.uri.fsPath.replace(/\\/g, '/');
+  return /\/app\/routers\/.+\.(js|ts)$/.test(p);
+}
+
 export function normalizePath(p: string): string {
   let s = p.trim();
   if (!s.startsWith('/')) {
@@ -8,7 +14,7 @@ export function normalizePath(p: string): string {
   return s;
 }
 
-function expandToQuotedString(
+export function expandToQuotedString(
   doc: vscode.TextDocument,
   pos: vscode.Position
 ): vscode.Range | undefined {
@@ -74,6 +80,20 @@ export function getApiPathAtPosition(
         apiPath: normalizePath(t),
         originRange: expand
       };
+    }
+  }
+
+  /** app/routers 内：第二段 URL 常为 /wscump/...，不要求包含 /v2/ */
+  if (isAppRouterFile(doc)) {
+    const routerExpand = expandToQuotedString(doc, pos);
+    if (routerExpand) {
+      const t = doc.getText(routerExpand).trim();
+      if (t.startsWith('/') && t.length > 1) {
+        return {
+          apiPath: normalizePath(t),
+          originRange: routerExpand
+        };
+      }
     }
   }
 

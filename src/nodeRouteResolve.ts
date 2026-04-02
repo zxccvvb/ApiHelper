@@ -22,7 +22,7 @@ function findRouteStartBefore(content: string, pathIndex: number): number {
   return lastStart;
 }
 
-function extractBalancedRoute(
+export function extractBalancedRoute(
   content: string,
   routeStart: number
 ): string | null {
@@ -42,7 +42,7 @@ function extractBalancedRoute(
   return null;
 }
 
-function splitRouteElements(routeInner: string): string[] {
+export function splitRouteElements(routeInner: string): string[] {
   const inner = routeInner.slice(1, -1).trim();
   const parts: string[] = [];
   let i = 0;
@@ -88,7 +88,7 @@ function splitRouteElements(routeInner: string): string[] {
   return parts;
 }
 
-function resolveControllerRef(
+export function resolveControllerRef(
   third: string,
   routerFileContent: string
 ): string | null {
@@ -108,7 +108,7 @@ function resolveControllerRef(
   return am ? am[1] : null;
 }
 
-function extractHandlerMethod(fourth: string): string | null {
+export function extractHandlerMethod(fourth: string): string | null {
   const t = fourth.trim();
   if (t.startsWith('[')) {
     const quoted = [...t.matchAll(/'([^']*)'/g)].map((x) => x[1]);
@@ -125,20 +125,64 @@ function extractHandlerMethod(fourth: string): string | null {
   return s ? s[1] : null;
 }
 
-function controllerRefToPath(
+/**
+ * Astroboy 引用 `lottery-code.IndexController` → `app/controllers/lottery-code/IndexController`
+ * 实际文件可能是编译前的 `.ts` 或运行时的 `.js`，按存在性优先 `.ts` 再 `.js`
+ */
+export function controllerRefToDirAndBasename(
   workspaceRoot: string,
   controllerRef: string
-): string | null {
+): { dir: string; fileBase: string } | null {
   const dot = controllerRef.lastIndexOf('.');
   if (dot <= 0) {
     return null;
   }
   const dir = controllerRef.slice(0, dot);
   const fileBase = controllerRef.slice(dot + 1);
-  return path.join(workspaceRoot, 'app', 'controllers', dir, `${fileBase}.js`);
+  return {
+    dir: path.join(workspaceRoot, 'app', 'controllers', dir),
+    fileBase
+  };
 }
 
-function findHandlerLine(content: string, methodName: string): number {
+/** @deprecated 使用 resolveExistingControllerPath（支持 .ts / .js） */
+export function controllerRefToPath(
+  workspaceRoot: string,
+  controllerRef: string
+): string | null {
+  const p = controllerRefToDirAndBasename(workspaceRoot, controllerRef);
+  return p ? path.join(p.dir, `${p.fileBase}.js`) : null;
+}
+
+export async function resolveExistingControllerPath(
+  workspaceRoot: string,
+  controllerRef: string,
+  token?: vscode.CancellationToken
+): Promise<string | null> {
+  const p = controllerRefToDirAndBasename(workspaceRoot, controllerRef);
+  if (!p) {
+    return null;
+  }
+  const extensions = ['.ts', '.js'];
+  for (const ext of extensions) {
+    if (token?.isCancellationRequested) {
+      return null;
+    }
+    const fsPath = path.join(p.dir, `${p.fileBase}${ext}`);
+    const uri = vscode.Uri.file(fsPath);
+    try {
+      const st = await vscode.workspace.fs.stat(uri);
+      if (st.type === vscode.FileType.File) {
+        return fsPath;
+      }
+    } catch {
+      // try next extension
+    }
+  }
+  return null;
+}
+
+export function findHandlerLine(content: string, methodName: string): number {
   const escaped = methodName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp(`^\\s*(?:async\\s+)?${escaped}\\s*\\(`, 'm');
   const m = content.match(re);
@@ -151,6 +195,28 @@ function findHandlerLine(content: string, methodName: string): number {
     return content.slice(0, m2.index).split('\n').length;
   }
   return 1;
+}
+
+/** 光标所在列属于哪一条「单行」路由数组（从 `[` 起算的 balanced `[...]`） */
+export function findRouteStartOnLine(line: string, col: number): number {
+  const indices: number[] = [];
+  for (let i = 0; i <= col && i < line.length; i++) {
+    if (line[i] === '[') {
+      indices.push(i);
+    }
+  }
+  for (let j = indices.length - 1; j >= 0; j--) {
+    const start = indices[j];
+    const routeStr = extractBalancedRoute(line, start);
+    if (!routeStr) {
+      continue;
+    }
+    const end = start + routeStr.length;
+    if (col >= start && col < end) {
+      return start;
+    }
+  }
+  return -1;
 }
 
 export async function findRouteForPath(
@@ -223,22 +289,16 @@ export async function findRouteForPath(
         continue;
       }
 
-      const controllerFs = controllerRefToPath(root, controllerRef);
+      const controllerFs = await resolveExistingControllerPath(
+        root,
+        controllerRef,
+        token
+      );
       if (!controllerFs) {
         searchFrom = idx + 1;
         continue;
       }
       const controllerUri = vscode.Uri.file(controllerFs);
-      try {
-        const st = await vscode.workspace.fs.stat(controllerUri);
-        if (st.type !== vscode.FileType.File) {
-          searchFrom = idx + 1;
-          continue;
-        }
-      } catch {
-        searchFrom = idx + 1;
-        continue;
-      }
 
       const ctrlContent = (await vscode.workspace.fs.readFile(controllerUri)).toString();
       const handlerLine = findHandlerLine(ctrlContent, handlerMethod);
