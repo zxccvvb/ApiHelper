@@ -1,0 +1,61 @@
+{
+  "name": "api-helper",
+  "displayName": "ApiHelper",
+  "description": "快速定位：前端请求的 /v2/... 经本项目 Node 转发（路由注册）后，由哪段 Router、哪个 Controller 方法实际处理——从字符串一键跳到实现。",
+  "version": "1.0.0",
+  "icon": "images/icon.png",
+  "publisher": "mo9on",
+  "author": {
+    "name": "九月",
+    "url": "https://github.com/zxccvvb"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/youzan/retail-node-ump.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [
+    "onLanguage:typescript",
+    "onLanguage:typescriptreact",
+    "onLanguage:javascript",
+    "onLanguage:javascriptreact",
+    "onCommand:apiHelper.goToNodeHandler"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "apiHelper.goToNodeHandler",
+        "title": "ApiHelper: 跳转到 Node 接口实现"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "apiHelper.goToNodeHandler",
+          "group": "navigation@100"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vsix": "npx @vscode/vsce package",
+    "version:patch": "npm version patch --no-git-tag-version --no-git-checks",
+    "version:minor": "npm version minor --no-git-tag-version --no-git-checks",
+    "version:major": "npm version major --no-git-tag-version --no-git-checks",
+    "release:patch": "npm version patch",
+    "release:minor": "npm version minor",
+    "release:major": "npm version major"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}
