@@ -317,3 +317,111 @@ export async function findRouteForPath(
 
   return undefined;
 }
+
+function routePathMatchesFolderName(routePath: string, folderName: string): boolean {
+  const trimmed = routePath.split('?')[0].replace(/\/+$/, '');
+  const segments = trimmed.split('/').filter(Boolean);
+  if (!segments.length) {
+    return false;
+  }
+  return segments[segments.length - 1] === folderName;
+}
+
+function calcFolderRouteScore(pathPart: string, httpMethod: string, handlerMethod: string): number {
+  let score = 0;
+  if (!pathPart.includes('/api/')) {
+    score += 3;
+  }
+  if (httpMethod.toUpperCase() === 'GET') {
+    score += 2;
+  }
+  if (/getindexhtml/i.test(handlerMethod)) {
+    score += 2;
+  }
+  return score;
+}
+
+/**
+ * 通过 client/route/<folderName> 的 folderName 反查 Node 路由。
+ * 例如 folderName=appointment-decoration 命中 /v2/ump/appointment-decoration。
+ */
+export async function findRouteForFolderName(
+  folderName: string,
+  token: vscode.CancellationToken
+): Promise<NodeRouteHit | undefined> {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders?.length) {
+    return undefined;
+  }
+  const root = folders[0].uri.fsPath;
+  const routerFiles = await vscode.workspace.findFiles(
+    ROUTER_GLOB,
+    '**/node_modules/**',
+    500,
+    token
+  );
+
+  let best: (NodeRouteHit & { score: number }) | undefined;
+
+  for (const uri of routerFiles) {
+    if (token.isCancellationRequested) {
+      return undefined;
+    }
+    const content = (await vscode.workspace.fs.readFile(uri)).toString();
+    const routeStartRe = /\[\s*['"](GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)['"]/gi;
+    let startMatch: RegExpExecArray | null;
+    while ((startMatch = routeStartRe.exec(content)) !== null) {
+      const routeStart = startMatch.index;
+      const routeStr = extractBalancedRoute(content, routeStart);
+      if (!routeStr) {
+        continue;
+      }
+      const parts = splitRouteElements(routeStr);
+      if (parts.length < 4) {
+        continue;
+      }
+      const pathPart = parts[1].replace(/^['"]|['"]$/g, '');
+      if (!routePathMatchesFolderName(pathPart, folderName)) {
+        continue;
+      }
+
+      const httpMethod = parts[0].replace(/^['"]|['"]$/g, '');
+      const controllerRef = resolveControllerRef(parts[2], content);
+      const handlerMethod = extractHandlerMethod(parts[3]);
+      if (!controllerRef || !handlerMethod) {
+        continue;
+      }
+      const controllerFs = await resolveExistingControllerPath(
+        root,
+        controllerRef,
+        token
+      );
+      if (!controllerFs) {
+        continue;
+      }
+      const controllerUri = vscode.Uri.file(controllerFs);
+      const ctrlContent = (await vscode.workspace.fs.readFile(controllerUri)).toString();
+      const handlerLine = findHandlerLine(ctrlContent, handlerMethod);
+      const routeLine = content.slice(0, routeStart).split('\n').length;
+      const score = calcFolderRouteScore(pathPart, httpMethod, handlerMethod);
+
+      const candidate: NodeRouteHit & { score: number } = {
+        routerUri: uri,
+        routerLine: routeLine,
+        controllerUri,
+        handlerLine,
+        httpMethod,
+        score
+      };
+      if (!best || candidate.score > best.score) {
+        best = candidate;
+      }
+    }
+  }
+
+  if (!best) {
+    return undefined;
+  }
+  const { score: _score, ...hit } = best;
+  return hit;
+}

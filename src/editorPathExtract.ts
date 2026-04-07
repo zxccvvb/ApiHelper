@@ -136,3 +136,12 @@ export function extractApiPath(editor: vscode.TextEditor): string | undefined {
 
   return undefined;
 }
+
+/** 从当前文件路径提取 client/route/<folderName> 中的 folderName */
+export function extractRouteFolderName(
+  editor: vscode.TextEditor
+): string | undefined {
+  const fsPath = editor.document.uri.fsPath.replace(/\\/g, '/');
+  const m = fsPath.match(/\/client\/route\/([^/]+)\//);
+  return m?.[1];
+}

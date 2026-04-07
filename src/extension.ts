@@ -1,12 +1,13 @@
-import * as path from 'path';
 import * as vscode from 'vscode';
+import { findClientEntryByApiPath } from './clientRouteResolve';
 import {
   extractApiPath,
+  extractRouteFolderName,
   getApiPathAtPosition,
   isAppRouterFile,
   normalizePath
 } from './editorPathExtract';
-import { findRouteForPath } from './nodeRouteResolve';
+import { findRouteForFolderName, findRouteForPath } from './nodeRouteResolve';
 import { resolveRouterDirectHandler } from './routerCursor';
 
 const DEFINITION_SELECTOR: vscode.DocumentSelector = [
@@ -46,6 +47,20 @@ export function activate(context: vscode.ExtensionContext): void {
         if (!hit) {
           return null;
         }
+        if (isAppRouterFile(document)) {
+          const clientUri = await findClientEntryByApiPath(hit.apiPath, token);
+          if (clientUri) {
+            const targetPos = new vscode.Position(0, 0);
+            const targetRange = new vscode.Range(targetPos, targetPos);
+            const link: vscode.LocationLink = {
+              originSelectionRange: hit.originRange,
+              targetUri: clientUri,
+              targetRange,
+              targetSelectionRange: targetRange
+            };
+            return [link];
+          }
+        }
 
         const found = await findRouteForPath(hit.apiPath, token);
         if (!found) {
@@ -55,13 +70,13 @@ export function activate(context: vscode.ExtensionContext): void {
           return null;
         }
 
-        const line = Math.max(0, found.handlerLine - 1);
+        const line = Math.max(0, found.routerLine - 1);
         const targetPos = new vscode.Position(line, 0);
         const targetRange = new vscode.Range(targetPos, targetPos);
 
         const link: vscode.LocationLink = {
           originSelectionRange: hit.originRange,
-          targetUri: found.controllerUri,
+          targetUri: found.routerUri,
           targetRange,
           targetSelectionRange: targetRange
         };
@@ -75,8 +90,9 @@ export function activate(context: vscode.ExtensionContext): void {
     async () => {
       const editor = vscode.window.activeTextEditor;
       let apiPath = editor ? extractApiPath(editor) : undefined;
+      const folderName = editor ? extractRouteFolderName(editor) : undefined;
 
-      if (!apiPath) {
+      if (!apiPath && !folderName) {
         apiPath = await vscode.window.showInputBox({
           title: 'ApiHelper',
           prompt: '输入接口路径，例如 /v2/ump/mobile-order/updateAllScanOrderConfigs',
@@ -88,31 +104,39 @@ export function activate(context: vscode.ExtensionContext): void {
         apiPath = normalizePath(apiPath);
       }
 
-      const skipV2Warning =
-        apiPath.startsWith('/wscump/') ||
-        (editor && isAppRouterFile(editor.document));
-      if (!apiPath.startsWith('/v2/') && !skipV2Warning) {
-        const ok = await vscode.window.showWarningMessage(
-          '路径通常以 /v2/ 开头，是否继续查找？',
-          '继续',
-          '取消'
-        );
-        if (ok !== '继续') {
-          return;
+      if (apiPath) {
+        const skipV2Warning =
+          apiPath.startsWith('/wscump/') ||
+          (editor && isAppRouterFile(editor.document));
+        if (!apiPath.startsWith('/v2/') && !skipV2Warning) {
+          const ok = await vscode.window.showWarningMessage(
+            '路径通常以 /v2/ 开头，是否继续查找？',
+            '继续',
+            '取消'
+          );
+          if (ok !== '继续') {
+            return;
+          }
         }
       }
 
       await vscode.window.withProgress(
         {
           location: vscode.ProgressLocation.Notification,
-          title: 'ApiHelper: 查找路由与 Controller...',
+          title: 'ApiHelper: 查找路由定义...',
           cancellable: true
         },
         async (progress, token) => {
-          const found = await findRouteForPath(apiPath!, token);
+          let found = apiPath
+            ? await findRouteForPath(apiPath, token)
+            : undefined;
+          if (!found && folderName) {
+            found = await findRouteForFolderName(folderName, token);
+          }
           if (!found) {
+            const lookupTarget = apiPath || folderName || '';
             vscode.window.showErrorMessage(
-              `未在 app/routers 中找到路径：${apiPath}`
+              `未在 app/routers 中找到匹配路由：${lookupTarget}`
             );
             return;
           }
@@ -120,20 +144,10 @@ export function activate(context: vscode.ExtensionContext): void {
           progress.report({ increment: 100 });
 
           const routerPos = new vscode.Position(found.routerLine - 1, 0);
-          const ctrlPos = new vscode.Position(found.handlerLine - 1, 0);
-
-          await openAt(found.controllerUri, ctrlPos);
-
-          const openRouter = '查看 Router 定义';
-          const choice = await vscode.window.showInformationMessage(
-            `ApiHelper: ${found.httpMethod} ${apiPath} → ${path.basename(
-              found.controllerUri.fsPath
-            )}:${found.handlerLine}`,
-            openRouter
+          await openAt(found.routerUri, routerPos);
+          void vscode.window.showInformationMessage(
+            `ApiHelper: 已定位路由 ${found.httpMethod} ${apiPath || folderName}`
           );
-          if (choice === openRouter) {
-            await openAt(found.routerUri, routerPos);
-          }
         }
       );
     }
