@@ -8,7 +8,11 @@ import {
   normalizePath,
   parseApiPathFromInput
 } from './editorPathExtract';
-import { findRouteForFolderName, findRouteForPath } from './nodeRouteResolve';
+import {
+  findPathTextInRouteFiles,
+  findRouteForFolderName,
+  findRouteForPath
+} from './nodeRouteResolve';
 import { resolveRouterDirectHandler } from './routerCursor';
 
 const DEFINITION_SELECTOR: vscode.DocumentSelector = [
@@ -76,10 +80,23 @@ export function activate(context: vscode.ExtensionContext): void {
 
         const found = await findRouteForPath(hit.apiPath, token);
         if (!found) {
-          void vscode.window.showErrorMessage(
-            `ApiHelper: 未在 app/routers 中找到路径 ${hit.apiPath}`
-          );
-          return null;
+          const textHit = await findPathTextInRouteFiles(hit.apiPath, token);
+          if (!textHit) {
+            void vscode.window.showErrorMessage(
+              `ApiHelper: 未在 app/routes 或 app/routers 中找到路径 ${hit.apiPath}`
+            );
+            return null;
+          }
+          const line = Math.max(0, textHit.routerLine - 1);
+          const targetPos = new vscode.Position(line, 0);
+          const targetRange = new vscode.Range(targetPos, targetPos);
+          const link: vscode.LocationLink = {
+            originSelectionRange: hit.originRange,
+            targetUri: textHit.routerUri,
+            targetRange,
+            targetSelectionRange: targetRange
+          };
+          return [link];
         }
 
         const line = Math.max(0, found.routerLine - 1);
@@ -115,10 +132,22 @@ export function activate(context: vscode.ExtensionContext): void {
         if (!found && folderName) {
           found = await findRouteForFolderName(folderName, token);
         }
+        if (!found && apiPath) {
+          const textHit = await findPathTextInRouteFiles(apiPath, token);
+          if (textHit) {
+            progress.report({ increment: 100 });
+            const routerPos = new vscode.Position(textHit.routerLine - 1, 0);
+            await openAt(textHit.routerUri, routerPos);
+            void vscode.window.showInformationMessage(
+              `ApiHelper: 未命中标准路由定义，已在 app/routes 或 app/routers 中定位 ${sourceLabel}`
+            );
+            return;
+          }
+        }
         if (!found) {
           const lookupTarget = apiPath || folderName || '';
           vscode.window.showErrorMessage(
-            `未在 app/routers 中找到匹配路由：${lookupTarget}`
+            `未在 app/routes 或 app/routers 中找到匹配路由：${lookupTarget}`
           );
           return;
         }

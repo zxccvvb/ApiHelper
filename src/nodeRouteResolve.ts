@@ -1,7 +1,10 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 
-export const ROUTER_GLOB = '**/app/routers/**/*.js';
+export const ROUTER_GLOBS = [
+  '**/app/routers/**/*.{js,ts}',
+  '**/app/routes/**/*.{js,ts}'
+];
 
 export interface NodeRouteHit {
   routerUri: vscode.Uri;
@@ -9,6 +12,101 @@ export interface NodeRouteHit {
   controllerUri: vscode.Uri;
   handlerLine: number;
   httpMethod: string;
+}
+
+export interface RouteTextHit {
+  routerUri: vscode.Uri;
+  routerLine: number;
+}
+
+async function findRouteFiles(
+  token?: vscode.CancellationToken
+): Promise<vscode.Uri[]> {
+  const allFiles = await Promise.all(
+    ROUTER_GLOBS.map((glob) =>
+      vscode.workspace.findFiles(glob, '**/node_modules/**', 500, token)
+    )
+  );
+  const dedup = new Map<string, vscode.Uri>();
+  for (const files of allFiles) {
+    for (const file of files) {
+      dedup.set(file.fsPath, file);
+    }
+  }
+  return [...dedup.values()];
+}
+
+function buildPathFallbackCandidates(apiPath: string): string[] {
+  const normalized = apiPath.split(/[?#]/)[0].replace(/\/+$/, '') || '/';
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  const push = (value: string): void => {
+    if (!value || seen.has(value)) {
+      return;
+    }
+    seen.add(value);
+    candidates.push(value);
+  };
+
+  push(normalized);
+  if (normalized !== '/') {
+    push(`${normalized}/*`);
+  }
+
+  const segments = normalized.split('/').filter(Boolean);
+  while (segments.length > 1) {
+    segments.pop();
+    const base = `/${segments.join('/')}`;
+    push(base);
+    push(`${base}/*`);
+  }
+
+  return candidates;
+}
+
+function findQuotedPathIndex(content: string, pathValue: string): number {
+  const needles = [`'${pathValue}'`, `"${pathValue}"`, `\`${pathValue}\``];
+  let best = -1;
+  for (const needle of needles) {
+    const idx = content.indexOf(needle);
+    if (idx < 0) {
+      continue;
+    }
+    if (best < 0 || idx < best) {
+      best = idx;
+    }
+  }
+  return best;
+}
+
+export async function findPathTextInRouteFiles(
+  apiPath: string,
+  token?: vscode.CancellationToken
+): Promise<RouteTextHit | undefined> {
+  const routeFiles = await findRouteFiles(token);
+  if (!routeFiles.length) {
+    return undefined;
+  }
+
+  const candidates = buildPathFallbackCandidates(apiPath);
+  for (const pathValue of candidates) {
+    for (const uri of routeFiles) {
+      if (token?.isCancellationRequested) {
+        return undefined;
+      }
+      const content = (await vscode.workspace.fs.readFile(uri)).toString();
+      const idx = findQuotedPathIndex(content, pathValue);
+      if (idx < 0) {
+        continue;
+      }
+      const line = content.slice(0, idx).split('\n').length;
+      return {
+        routerUri: uri,
+        routerLine: line
+      };
+    }
+  }
+  return undefined;
 }
 
 function findRouteStartBefore(content: string, pathIndex: number): number {
@@ -229,12 +327,7 @@ export async function findRouteForPath(
   }
   const root = folders[0].uri.fsPath;
 
-  const routerFiles = await vscode.workspace.findFiles(
-    ROUTER_GLOB,
-    '**/node_modules/**',
-    500,
-    token
-  );
+  const routerFiles = await findRouteFiles(token);
 
   const needle1 = `'${apiPath}'`;
   const needle2 = `"${apiPath}"`;
@@ -373,12 +466,7 @@ export async function findRouteForFolderName(
     return undefined;
   }
   const root = folders[0].uri.fsPath;
-  const routerFiles = await vscode.workspace.findFiles(
-    ROUTER_GLOB,
-    '**/node_modules/**',
-    500,
-    token
-  );
+  const routerFiles = await findRouteFiles(token);
 
   let best: (NodeRouteHit & { score: number }) | undefined;
 
