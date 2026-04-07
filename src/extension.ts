@@ -17,6 +17,12 @@ const DEFINITION_SELECTOR: vscode.DocumentSelector = [
   { scheme: 'file', language: 'javascriptreact' }
 ];
 
+function inferRouterFileFolderName(document: vscode.TextDocument): string | undefined {
+  const fsPath = document.uri.fsPath.replace(/\\/g, '/');
+  const m = fsPath.match(/\/app\/routers\/([^/]+)\.(js|ts)$/);
+  return m?.[1];
+}
+
 async function openAt(uri: vscode.Uri, pos: vscode.Position): Promise<void> {
   const doc = await vscode.workspace.openTextDocument(uri);
   const ed = await vscode.window.showTextDocument(doc, {
@@ -48,7 +54,12 @@ export function activate(context: vscode.ExtensionContext): void {
           return null;
         }
         if (isAppRouterFile(document)) {
-          const clientUri = await findClientEntryByApiPath(hit.apiPath, token);
+          const preferredFolderName = inferRouterFileFolderName(document);
+          const clientUri = await findClientEntryByApiPath(
+            hit.apiPath,
+            token,
+            preferredFolderName
+          );
           if (clientUri) {
             const targetPos = new vscode.Position(0, 0);
             const targetRange = new vscode.Range(targetPos, targetPos);

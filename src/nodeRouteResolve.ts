@@ -324,7 +324,26 @@ function routePathMatchesFolderName(routePath: string, folderName: string): bool
   if (!segments.length) {
     return false;
   }
-  return segments[segments.length - 1] === folderName;
+  const last = segments[segments.length - 1];
+  if (last === folderName) {
+    return true;
+  }
+
+  // 典型路由：/v2/ump/<module>/...
+  if (segments.length >= 3 && segments[0] === 'v2' && segments[1] === 'ump') {
+    if (segments[2] === folderName) {
+      return true;
+    }
+  }
+
+  // 兼容 /wscump/<module>/...
+  if (segments.length >= 2 && segments[0] === 'wscump') {
+    if (segments[1] === folderName) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function calcFolderRouteScore(pathPart: string, httpMethod: string, handlerMethod: string): number {
