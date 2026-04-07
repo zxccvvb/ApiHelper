@@ -14,6 +14,48 @@ export function normalizePath(p: string): string {
   return s;
 }
 
+function normalizeApiLikePath(p: string): string {
+  const noQueryOrHash = p.split(/[?#]/)[0];
+  const normalized = normalizePath(noQueryOrHash);
+  return normalized.replace(/\/+$/, '') || '/';
+}
+
+/**
+ * 解析输入值为接口路径：
+ * - 支持完整 URL（任意域名，如 https://foo.com/v2/ump/mobile-order#...）
+ * - 支持 domain/path 形式（如 store.youzan.com/v2/ump/mobile-order）
+ * - 支持直接输入 /v2/... 路径
+ */
+export function parseApiPathFromInput(input: string): string | undefined {
+  const raw = input.trim();
+  if (!raw) {
+    return undefined;
+  }
+
+  const asPath = (): string | undefined => {
+    if (raw.startsWith('/')) {
+      return normalizeApiLikePath(raw);
+    }
+    const slashIdx = raw.indexOf('/');
+    if (slashIdx > 0) {
+      return normalizeApiLikePath(raw.slice(slashIdx));
+    }
+    return undefined;
+  };
+
+  try {
+    const asUrl = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+    const parsed = new URL(asUrl);
+    if (parsed.pathname && parsed.pathname !== '/') {
+      return normalizeApiLikePath(parsed.pathname);
+    }
+  } catch {
+    // fallback to path parse
+  }
+
+  return asPath();
+}
+
 export function expandToQuotedString(
   doc: vscode.TextDocument,
   pos: vscode.Position

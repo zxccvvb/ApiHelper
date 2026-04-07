@@ -21,8 +21,7 @@
     "onLanguage:typescript",
     "onLanguage:typescriptreact",
     "onLanguage:javascript",
-    "onLanguage:javascriptreact",
-    "onCommand:apiHelper.goToNodeHandler"
+    "onLanguage:javascriptreact"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -30,6 +29,10 @@
       {
         "command": "apiHelper.goToNodeHandler",
         "title": "ApiHelper: 跳转到 Node 接口实现"
+      },
+      {
+        "command": "apiHelper.goToNodeHandlerByFullPath",
+        "title": "ApiHelper: 通过完整 URL 跳转路由"
       }
     ],
     "menus": {
@@ -37,6 +40,10 @@
         {
           "command": "apiHelper.goToNodeHandler",
           "group": "navigation@100"
+        },
+        {
+          "command": "apiHelper.goToNodeHandlerByFullPath",
+          "group": "navigation@101"
         }
       ]
     }

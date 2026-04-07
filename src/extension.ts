@@ -5,7 +5,8 @@ import {
   extractRouteFolderName,
   getApiPathAtPosition,
   isAppRouterFile,
-  normalizePath
+  normalizePath,
+  parseApiPathFromInput
 } from './editorPathExtract';
 import { findRouteForFolderName, findRouteForPath } from './nodeRouteResolve';
 import { resolveRouterDirectHandler } from './routerCursor';
@@ -96,6 +97,43 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   );
 
+  const openRouterByApiPath = async (
+    apiPath: string | undefined,
+    folderName: string | undefined,
+    sourceLabel: string
+  ): Promise<void> => {
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: 'ApiHelper: 查找路由定义...',
+        cancellable: true
+      },
+      async (progress, token) => {
+        let found = apiPath
+          ? await findRouteForPath(apiPath, token)
+          : undefined;
+        if (!found && folderName) {
+          found = await findRouteForFolderName(folderName, token);
+        }
+        if (!found) {
+          const lookupTarget = apiPath || folderName || '';
+          vscode.window.showErrorMessage(
+            `未在 app/routers 中找到匹配路由：${lookupTarget}`
+          );
+          return;
+        }
+
+        progress.report({ increment: 100 });
+
+        const routerPos = new vscode.Position(found.routerLine - 1, 0);
+        await openAt(found.routerUri, routerPos);
+        void vscode.window.showInformationMessage(
+          `ApiHelper: 已定位路由 ${found.httpMethod} ${sourceLabel}`
+        );
+      }
+    );
+  };
+
   const disposable = vscode.commands.registerCommand(
     'apiHelper.goToNodeHandler',
     async () => {
@@ -130,41 +168,31 @@ export function activate(context: vscode.ExtensionContext): void {
           }
         }
       }
-
-      await vscode.window.withProgress(
-        {
-          location: vscode.ProgressLocation.Notification,
-          title: 'ApiHelper: 查找路由定义...',
-          cancellable: true
-        },
-        async (progress, token) => {
-          let found = apiPath
-            ? await findRouteForPath(apiPath, token)
-            : undefined;
-          if (!found && folderName) {
-            found = await findRouteForFolderName(folderName, token);
-          }
-          if (!found) {
-            const lookupTarget = apiPath || folderName || '';
-            vscode.window.showErrorMessage(
-              `未在 app/routers 中找到匹配路由：${lookupTarget}`
-            );
-            return;
-          }
-
-          progress.report({ increment: 100 });
-
-          const routerPos = new vscode.Position(found.routerLine - 1, 0);
-          await openAt(found.routerUri, routerPos);
-          void vscode.window.showInformationMessage(
-            `ApiHelper: 已定位路由 ${found.httpMethod} ${apiPath || folderName}`
-          );
-        }
-      );
+      await openRouterByApiPath(apiPath, folderName, apiPath || folderName || '');
     }
   );
 
-  context.subscriptions.push(definitionProvider, disposable);
+  const openByFullInputDisposable = vscode.commands.registerCommand(
+    'apiHelper.goToNodeHandlerByFullPath',
+    async () => {
+      const rawInput = await vscode.window.showInputBox({
+        title: 'ApiHelper',
+        prompt: '输入完整 URL 或接口路径，例如 https://store.youzan.com/v2/ump/mobile-order#/xxx',
+        placeHolder: 'https://example.com/v2/ump/mobile-order#/page-decoration?type=pickup'
+      });
+      if (!rawInput) {
+        return;
+      }
+      const apiPath = parseApiPathFromInput(rawInput);
+      if (!apiPath || apiPath === '/') {
+        void vscode.window.showErrorMessage('未能从输入中解析出有效接口路径');
+        return;
+      }
+      await openRouterByApiPath(apiPath, undefined, apiPath);
+    }
+  );
+
+  context.subscriptions.push(definitionProvider, disposable, openByFullInputDisposable);
 }
 
 export function deactivate(): void {}

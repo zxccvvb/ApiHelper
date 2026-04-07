@@ -11,6 +11,11 @@
 [命令标题] ApiHelper: 跳转到 Node 接口实现
 ```
 
+```txt
+[命令 ID] apiHelper.goToNodeHandlerByFullPath
+[命令标题] ApiHelper: 通过完整 URL 跳转路由
+```
+
 ## 能力说明
 
 ```txt
@@ -28,6 +33,12 @@
 ```txt
 [能力-3] 兼容接口路径查找
 当代码里有明确 '/v2/...' 字符串时，仍可按路径在 app/routers/**/*.js 中定位匹配路由。
+```
+
+```txt
+[能力-4] 输入完整 URL 直接定位 router
+执行命令后弹输入框，可输入任意域名的完整 URL，
+插件会自动提取 pathname（例如 /v2/ump/mobile-order）并定位到 app/routers 中对应路由行。
 ```
 
 ## 使用方法（按代码位置）
