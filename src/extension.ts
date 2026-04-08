@@ -10,6 +10,7 @@ import {
 } from './editorPathExtract';
 import {
   findPathTextInRouteFiles,
+  findRouteForControllerDirName,
   findRouteForFolderName,
   findRouteForPath
 } from './nodeRouteResolve';
@@ -131,6 +132,9 @@ export function activate(context: vscode.ExtensionContext): void {
           : undefined;
         if (!found && folderName) {
           found = await findRouteForFolderName(folderName, token);
+        }
+        if (!found && folderName) {
+          found = await findRouteForControllerDirName(folderName, token);
         }
         if (!found && apiPath) {
           const textHit = await findPathTextInRouteFiles(apiPath, token);

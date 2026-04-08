@@ -179,11 +179,17 @@ export function extractApiPath(editor: vscode.TextEditor): string | undefined {
   return undefined;
 }
 
-/** 从当前文件路径提取 client/route/<folderName> 中的 folderName */
+/**
+ * 从当前文件路径提取 client/route 下的「应用路径」（相对 route 目录，可含多级目录）。
+ * 例如 financial-statement/app.tsx → financial-statement；
+ * life/business-overview/foo.tsx → life/business-overview
+ */
 export function extractRouteFolderName(
   editor: vscode.TextEditor
 ): string | undefined {
   const fsPath = editor.document.uri.fsPath.replace(/\\/g, '/');
-  const m = fsPath.match(/\/client\/route\/([^/]+)\//);
+  const m = fsPath.match(
+    /\/client\/route\/((?:[^/]+(?:\/[^/]+)*))\/[^/]+\.(tsx|jsx|ts|js)$/
+  );
   return m?.[1];
 }

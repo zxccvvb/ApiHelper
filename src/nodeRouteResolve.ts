@@ -140,11 +140,16 @@ export function extractBalancedRoute(
   return null;
 }
 
+/**
+ * 拆分 Astroboy 风格的路由数组元素：`[ 'GET', <path|registerApp(...)>, 'a.b', 'method' ]`
+ * 需同时考虑 `[]` 与 `()` 的深度，否则 `registerApp(..., [ 'a', 'b' ])` 会在内层数组逗号处被错误切断。
+ */
 export function splitRouteElements(routeInner: string): string[] {
   const inner = routeInner.slice(1, -1).trim();
   const parts: string[] = [];
   let i = 0;
-  let depth = 0;
+  let depthBracket = 0;
+  let depthParen = 0;
   let start = 0;
   let inQuote = false;
   let quote = '';
@@ -171,12 +176,18 @@ export function splitRouteElements(routeInner: string): string[] {
       continue;
     }
     if (c === '[') {
-      depth++;
+      depthBracket++;
     }
     if (c === ']') {
-      depth--;
+      depthBracket--;
     }
-    if (c === ',' && depth === 0) {
+    if (c === '(') {
+      depthParen++;
+    }
+    if (c === ')') {
+      depthParen--;
+    }
+    if (c === ',' && depthBracket === 0 && depthParen === 0) {
       parts.push(inner.slice(start, i).trim());
       start = i + 1;
     }
@@ -368,8 +379,7 @@ export async function findRouteForPath(
         continue;
       }
 
-      const pathPart = parts[1].replace(/^['"]|['"]$/g, '');
-      if (pathPart !== apiPath) {
+      if (!routePathPartMatchesApiPath(parts[1], apiPath)) {
         searchFrom = idx + 1;
         continue;
       }
@@ -439,6 +449,77 @@ function routePathMatchesFolderName(routePath: string, folderName: string): bool
   return false;
 }
 
+function normalizeRouteComparePath(p: string): string {
+  return p.split('?')[0].replace(/\/+$/, '') || '/';
+}
+
+function collectQuotedAbsolutePaths(snippet: string): string[] {
+  const out: string[] = [];
+  for (const m of snippet.matchAll(/['"](\/[^'"]*)['"]/g)) {
+    out.push(m[1]);
+  }
+  return out;
+}
+
+/** `@scope/pkg/path` → `pkg/path`（与 client/route 下相对目录对齐） */
+function microAppArgToRelativePath(arg: string): string {
+  const m = arg.match(/^@[^/]+\/(.+)$/);
+  return m ? m[1] : arg;
+}
+
+/**
+ * 路由数组第二项：普通路径字符串或 `registerApp('@scope/app-path', ['/a', '/b'])`
+ */
+export function routePathPartMatchesApiPath(
+  pathPart: string,
+  apiPath: string
+): boolean {
+  const want = normalizeRouteComparePath(apiPath);
+  const t = pathPart.trim();
+  const simple = t.match(/^['"]([^'"]+)['"]$/);
+  if (simple) {
+    return normalizeRouteComparePath(simple[1]) === want;
+  }
+  if (/registerApp\s*\(/.test(t)) {
+    for (const p of collectQuotedAbsolutePaths(t)) {
+      if (normalizeRouteComparePath(p) === want) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+export function routePathPartMatchesFolderName(
+  pathPart: string,
+  folderName: string
+): boolean {
+  const t = pathPart.trim();
+  const simple = t.match(/^['"]([^'"]+)['"]$/);
+  if (simple) {
+    return routePathMatchesFolderName(simple[1], folderName);
+  }
+  if (/registerApp\s*\(/.test(t)) {
+    const firstArgM = t.match(/registerApp\s*\(\s*['"]([^'"]+)['"]/);
+    if (firstArgM) {
+      const pkgPath = microAppArgToRelativePath(firstArgM[1]);
+      if (pkgPath === folderName) {
+        return true;
+      }
+      const segs = pkgPath.split('/');
+      if (segs[segs.length - 1] === folderName) {
+        return true;
+      }
+    }
+    for (const p of collectQuotedAbsolutePaths(t)) {
+      if (routePathMatchesFolderName(p, folderName)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function calcFolderRouteScore(pathPart: string, httpMethod: string, handlerMethod: string): number {
   let score = 0;
   if (!pathPart.includes('/api/')) {
@@ -487,8 +568,7 @@ export async function findRouteForFolderName(
       if (parts.length < 4) {
         continue;
       }
-      const pathPart = parts[1].replace(/^['"]|['"]$/g, '');
-      if (!routePathMatchesFolderName(pathPart, folderName)) {
+      if (!routePathPartMatchesFolderName(parts[1], folderName)) {
         continue;
       }
 
@@ -510,7 +590,90 @@ export async function findRouteForFolderName(
       const ctrlContent = (await vscode.workspace.fs.readFile(controllerUri)).toString();
       const handlerLine = findHandlerLine(ctrlContent, handlerMethod);
       const routeLine = content.slice(0, routeStart).split('\n').length;
-      const score = calcFolderRouteScore(pathPart, httpMethod, handlerMethod);
+      const score = calcFolderRouteScore(parts[1], httpMethod, handlerMethod);
+
+      const candidate: NodeRouteHit & { score: number } = {
+        routerUri: uri,
+        routerLine: routeLine,
+        controllerUri,
+        handlerLine,
+        httpMethod,
+        score
+      };
+      if (!best || candidate.score > best.score) {
+        best = candidate;
+      }
+    }
+  }
+
+  if (!best) {
+    return undefined;
+  }
+  const { score: _score, ...hit } = best;
+  return hit;
+}
+
+/**
+ * 二次兜底：`folderName` 与 Controller 引用前缀一致（如 financial-statement.IndexController），
+ * 用于 micro-app 等多路径注册且仅用目录名检索的场景。
+ */
+export async function findRouteForControllerDirName(
+  folderName: string,
+  token: vscode.CancellationToken
+): Promise<NodeRouteHit | undefined> {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders?.length) {
+    return undefined;
+  }
+  const root = folders[0].uri.fsPath;
+  const routerFiles = await findRouteFiles(token);
+
+  let best: (NodeRouteHit & { score: number }) | undefined;
+  const prefix = `${folderName}.`;
+
+  for (const uri of routerFiles) {
+    if (token.isCancellationRequested) {
+      return undefined;
+    }
+    const content = (await vscode.workspace.fs.readFile(uri)).toString();
+    const routeStartRe = /\[\s*['"](GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)['"]/gi;
+    let startMatch: RegExpExecArray | null;
+    while ((startMatch = routeStartRe.exec(content)) !== null) {
+      const routeStart = startMatch.index;
+      const routeStr = extractBalancedRoute(content, routeStart);
+      if (!routeStr) {
+        continue;
+      }
+      const parts = splitRouteElements(routeStr);
+      if (parts.length < 4) {
+        continue;
+      }
+      const controllerQuoted = parts[2].trim();
+      const cq = controllerQuoted.match(/^['"]([^'"]+)['"]$/);
+      const controllerPlain = cq ? cq[1] : '';
+      if (!controllerPlain.startsWith(prefix)) {
+        continue;
+      }
+
+      const httpMethod = parts[0].replace(/^['"]|['"]$/g, '');
+      const controllerRef = resolveControllerRef(parts[2], content);
+      const handlerMethod = extractHandlerMethod(parts[3]);
+      if (!controllerRef || !handlerMethod) {
+        continue;
+      }
+      const controllerFs = await resolveExistingControllerPath(
+        root,
+        controllerRef,
+        token
+      );
+      if (!controllerFs) {
+        continue;
+      }
+      const controllerUri = vscode.Uri.file(controllerFs);
+      const ctrlContent = (await vscode.workspace.fs.readFile(controllerUri)).toString();
+      const handlerLine = findHandlerLine(ctrlContent, handlerMethod);
+      const routeLine = content.slice(0, routeStart).split('\n').length;
+      const score = calcFolderRouteScore(parts[1], httpMethod, handlerMethod);
 
       const candidate: NodeRouteHit & { score: number } = {
         routerUri: uri,
