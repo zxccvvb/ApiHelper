@@ -1,6 +1,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import {
+  findClientEntryByApiPaths,
   findClientEntryByFolderName,
   inferFolderNamesFromApiPath
 } from './clientRouteResolve';
@@ -11,7 +12,7 @@ import {
   splitRouteElements
 } from './nodeRouteResolve';
 
-export type RouteCatalogItemType = 'page' | 'interface' | 'backend-interface';
+export type RouteCatalogItemType = 'page' | 'interface';
 
 export interface RouteCatalogLeaf {
   routePath: string;
@@ -40,11 +41,12 @@ export interface RouteCatalogItem {
 
 export interface RouteCatalogResult {
   workspaceName: string;
-  routerFileRelativePath: string;
+  scanTargetLabel: string;
   items: RouteCatalogItem[];
 }
 
 const HTTP_METHOD_RE = /\[\s*['"](GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)['"]/gi;
+const ROUTER_CATALOG_GLOB = '**/app/routers/**/*.js';
 
 function getWorkspaceRoot(): { root: string; name: string } | null {
   const folders = vscode.workspace.workspaceFolders;
@@ -55,6 +57,18 @@ function getWorkspaceRoot(): { root: string; name: string } | null {
     root: folders[0].uri.fsPath,
     name: folders[0].name
   };
+}
+
+async function findCatalogRouterFiles(
+  token?: vscode.CancellationToken
+): Promise<vscode.Uri[]> {
+  const files = await vscode.workspace.findFiles(
+    ROUTER_CATALOG_GLOB,
+    '**/node_modules/**',
+    undefined,
+    token
+  );
+  return files.sort((a, b) => a.fsPath.localeCompare(b.fsPath));
 }
 
 function toLineNumber(content: string, index: number): number {
@@ -122,9 +136,23 @@ function buildFolderCandidates(
 }
 
 async function resolveClientEntry(
+  basePaths: string[],
+  preferredFolderName: string | undefined,
   folderCandidates: string[],
   token?: vscode.CancellationToken
 ): Promise<{ fsPath: string; relativePath: string } | undefined> {
+  const apiMatchedUri = await findClientEntryByApiPaths(
+    basePaths,
+    token,
+    preferredFolderName
+  );
+  if (apiMatchedUri) {
+    return {
+      fsPath: apiMatchedUri.fsPath,
+      relativePath: vscode.workspace.asRelativePath(apiMatchedUri)
+    };
+  }
+
   for (const folderName of folderCandidates) {
     if (token?.isCancellationRequested) {
       return undefined;
@@ -155,6 +183,115 @@ function extractPathsFromRouteTag(routeTag: string): string[] {
     normalizeRoutePath(match[1])
   );
   return [...new Set(paths)];
+}
+
+function extractBalancedArray(content: string, start: number): string | null {
+  let depth = 0;
+  let inQuote = false;
+  let quote = '';
+
+  for (let i = start; i < content.length; i++) {
+    const ch = content[i];
+    if (inQuote) {
+      if (ch === '\\') {
+        i++;
+        continue;
+      }
+      if (ch === quote) {
+        inQuote = false;
+        quote = '';
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      inQuote = true;
+      quote = ch;
+      continue;
+    }
+    if (ch === '[') {
+      depth++;
+      continue;
+    }
+    if (ch === ']') {
+      depth--;
+      if (depth === 0) {
+        return content.slice(start, i + 1);
+      }
+    }
+  }
+
+  return null;
+}
+
+function collectStaticPathConstants(content: string): Map<string, string> {
+  const constants = new Map<string, string>();
+  const constRe =
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(`(?:\\.|[^`])*`|'(?:\\.|[^'])*'|"(?:\\.|[^"])*")\s*;/g;
+
+  let match: RegExpExecArray | null;
+  while ((match = constRe.exec(content)) !== null) {
+    const [, name, rawValue] = match;
+    constants.set(name, rawValue.slice(1, -1));
+  }
+
+  return constants;
+}
+
+function extractRouteListPaths(
+  content: string,
+  entryFsPath: string,
+  relativePath: string
+): RouteCatalogLeaf[] {
+  const items: RouteCatalogLeaf[] = [];
+  const seen = new Set<string>();
+  const constants = collectStaticPathConstants(content);
+  const routeListRe = /\b(?:const|let|var)\s+routeList\s*=\s*\[/g;
+  const pathValueRe =
+    /\bpath\s*:\s*([A-Za-z_$][\w$]*|`(?:\\.|[^`])*`|'(?:\\.|[^'])*'|"(?:\\.|[^"])*")/g;
+
+  let routeListMatch: RegExpExecArray | null;
+  while ((routeListMatch = routeListRe.exec(content)) !== null) {
+    const arrayStart = content.indexOf('[', routeListMatch.index);
+    if (arrayStart < 0) {
+      continue;
+    }
+    const routeListBlock = extractBalancedArray(content, arrayStart);
+    if (!routeListBlock) {
+      continue;
+    }
+
+    let pathMatch: RegExpExecArray | null;
+    while ((pathMatch = pathValueRe.exec(routeListBlock)) !== null) {
+      const rawValue = pathMatch[1].trim();
+      let routePath: string | undefined;
+
+      if (/^['"`]/.test(rawValue)) {
+        routePath = rawValue.slice(1, -1);
+      } else {
+        routePath = constants.get(rawValue);
+      }
+
+      if (!routePath) {
+        continue;
+      }
+
+      const normalized = normalizeRoutePath(routePath);
+      if (seen.has(normalized)) {
+        continue;
+      }
+      seen.add(normalized);
+
+      items.push({
+        routePath: normalized,
+        fullPath: normalized,
+        sourceFsPath: entryFsPath,
+        sourceRelativePath: relativePath,
+        sourceLine: toLineNumber(content, arrayStart + pathMatch.index)
+      });
+    }
+  }
+
+  return items;
 }
 
 async function parseClientRoutes(
@@ -200,6 +337,14 @@ async function parseClientRoutes(
     }
   }
 
+  for (const route of extractRouteListPaths(content, entryFsPath, relativePath)) {
+    if (seen.has(route.routePath)) {
+      continue;
+    }
+    seen.add(route.routePath);
+    items.push(route);
+  }
+
   return items;
 }
 
@@ -209,10 +354,7 @@ function buildRouteNote(type: RouteCatalogItemType, clientEntryRelativePath?: st
       ? `已找到页面入口：${clientEntryRelativePath}`
       : '已找到页面入口';
   }
-  if (type === 'interface') {
-    return '路由指向 getIndexHtml，但未找到前端页面注册，按接口展示';
-  }
-  return '未识别到页面入口，按后端接口展示';
+  return '未命中页面入口，按接口展示';
 }
 
 function buildLeafRoutes(basePaths: string[], clientRoutes: RouteCatalogLeaf[]): RouteCatalogLeaf[] {
@@ -244,75 +386,85 @@ export async function scanProjectRouteCatalog(
     throw new Error('未找到工作区');
   }
 
-  const defaultRouterFsPath = path.join(workspace.root, 'app', 'routers', 'default.js');
-  const defaultRouterUri = vscode.Uri.file(defaultRouterFsPath);
-  const defaultRouterContent = (await vscode.workspace.fs.readFile(defaultRouterUri)).toString();
+  const routerFiles = await findCatalogRouterFiles(token);
   const items: RouteCatalogItem[] = [];
 
-  let routeMatch: RegExpExecArray | null;
-  while ((routeMatch = HTTP_METHOD_RE.exec(defaultRouterContent)) !== null) {
+  for (const routerUri of routerFiles) {
     if (token?.isCancellationRequested) {
       break;
     }
 
-    const routeStart = routeMatch.index;
-    const routeBlock = extractBalancedRoute(defaultRouterContent, routeStart);
-    if (!routeBlock) {
-      continue;
+    const routerFsPath = routerUri.fsPath;
+    const routerRelativePath = vscode.workspace.asRelativePath(routerUri);
+    const preferredFolderName = path.basename(routerFsPath, path.extname(routerFsPath));
+    const routerContent = (await vscode.workspace.fs.readFile(routerUri)).toString();
+    const routeStartRe = new RegExp(HTTP_METHOD_RE.source, HTTP_METHOD_RE.flags);
+
+    let routeMatch: RegExpExecArray | null;
+    while ((routeMatch = routeStartRe.exec(routerContent)) !== null) {
+      if (token?.isCancellationRequested) {
+        break;
+      }
+
+      const routeStart = routeMatch.index;
+      const routeBlock = extractBalancedRoute(routerContent, routeStart);
+      if (!routeBlock) {
+        continue;
+      }
+
+      const parts = splitRouteElements(routeBlock);
+      if (parts.length < 4) {
+        continue;
+      }
+
+      const basePaths = extractBasePaths(parts[1]);
+      if (!basePaths.length) {
+        continue;
+      }
+
+      const controllerRef = resolveControllerRef(parts[2], routerContent);
+      const handlerMethod = extractHandlerMethod(parts[3]);
+      const folderCandidates = buildFolderCandidates(
+        basePaths,
+        controllerRef,
+        handlerMethod,
+        parts[1]
+      );
+      const clientEntry = await resolveClientEntry(
+        basePaths,
+        preferredFolderName,
+        folderCandidates,
+        token
+      );
+      const clientRouteDefs = clientEntry
+        ? await parseClientRoutes(clientEntry.fsPath, token)
+        : [];
+      const clientRoutes = buildLeafRoutes(basePaths, clientRouteDefs);
+
+      const type: RouteCatalogItemType = clientEntry ? 'page' : 'interface';
+
+      items.push({
+        id: `route-${items.length + 1}`,
+        type,
+        httpMethod: parts[0].replace(/^['"`]|['"`]$/g, ''),
+        basePaths,
+        routerFsPath,
+        routerRelativePath,
+        routerLine: toLineNumber(routerContent, routeStart),
+        controllerRef,
+        handlerMethod,
+        folderCandidates,
+        clientEntryFsPath: clientEntry?.fsPath,
+        clientEntryRelativePath: clientEntry?.relativePath,
+        clientRoutes,
+        note: buildRouteNote(type, clientEntry?.relativePath)
+      });
     }
-
-    const parts = splitRouteElements(routeBlock);
-    if (parts.length < 4) {
-      continue;
-    }
-
-    const basePaths = extractBasePaths(parts[1]);
-    if (!basePaths.length) {
-      continue;
-    }
-
-    const controllerRef = resolveControllerRef(parts[2], defaultRouterContent);
-    const handlerMethod = extractHandlerMethod(parts[3]);
-    const folderCandidates = buildFolderCandidates(
-      basePaths,
-      controllerRef,
-      handlerMethod,
-      parts[1]
-    );
-    const clientEntry = await resolveClientEntry(folderCandidates, token);
-    const clientRouteDefs = clientEntry
-      ? await parseClientRoutes(clientEntry.fsPath, token)
-      : [];
-    const clientRoutes = buildLeafRoutes(basePaths, clientRouteDefs);
-
-    let type: RouteCatalogItemType = 'page';
-    if (!clientRoutes.length) {
-      type = handlerMethod && /^getindexhtml$/i.test(handlerMethod)
-        ? 'interface'
-        : 'backend-interface';
-    }
-
-    items.push({
-      id: `route-${items.length + 1}`,
-      type,
-      httpMethod: parts[0].replace(/^['"`]|['"`]$/g, ''),
-      basePaths,
-      routerFsPath: defaultRouterFsPath,
-      routerRelativePath: vscode.workspace.asRelativePath(defaultRouterUri),
-      routerLine: toLineNumber(defaultRouterContent, routeStart),
-      controllerRef,
-      handlerMethod,
-      folderCandidates,
-      clientEntryFsPath: clientEntry?.fsPath,
-      clientEntryRelativePath: clientEntry?.relativePath,
-      clientRoutes,
-      note: buildRouteNote(type, clientEntry?.relativePath)
-    });
   }
 
   return {
     workspaceName: workspace.name,
-    routerFileRelativePath: vscode.workspace.asRelativePath(defaultRouterUri),
+    scanTargetLabel: 'app/routers/**/*.js',
     items
   };
 }

@@ -19,20 +19,14 @@ function getTypeLabel(type: RouteCatalogItem['type']): string {
   if (type === 'page') {
     return '页面';
   }
-  if (type === 'interface') {
-    return '接口';
-  }
-  return '后端接口';
+  return '接口';
 }
 
 function getTypeClass(type: RouteCatalogItem['type']): string {
   if (type === 'page') {
     return 'is-page';
   }
-  if (type === 'interface') {
-    return 'is-interface';
-  }
-  return 'is-backend';
+  return 'is-interface';
 }
 
 function renderLeaf(leaf: RouteCatalogLeaf): string {
@@ -82,7 +76,12 @@ function renderItem(item: RouteCatalogItem): string {
     : '<div class="empty">未解析到前端 Route path</div>';
 
   return `
-    <details class="item" open data-search="${escapeHtml(searchText)}">
+    <details
+      class="item"
+      open
+      data-search="${escapeHtml(searchText)}"
+      data-type="${escapeHtml(item.type)}"
+    >
       <summary>
         <div class="summary-main">
           <span class="badge ${getTypeClass(item.type)}">${getTypeLabel(item.type)}</span>
@@ -137,13 +136,19 @@ function renderItem(item: RouteCatalogItem): string {
 
 function renderHtml(
   webview: vscode.Webview,
-  routeFileRelativePath: string,
+  scanTargetLabel: string,
   items: RouteCatalogItem[],
   workspaceName: string
 ): string {
   const totalPageRoutes = items.reduce((sum, item) => sum + item.clientRoutes.length, 0);
+  const pageCount = items.filter((item) => item.type === 'page').length;
+  const interfaceCount = items.filter((item) => item.type === 'interface').length;
   const itemsHtml = items.map(renderItem).join('');
-  const serialized = JSON.stringify({ itemsLength: items.length }).replace(/</g, '\\u003c');
+  const serialized = JSON.stringify({
+    itemsLength: items.length,
+    totalPageRoutes,
+    workspaceName
+  }).replace(/</g, '\\u003c');
 
   return `<!DOCTYPE html>
   <html lang="zh-CN">
@@ -154,30 +159,27 @@ function renderHtml(
       <style>
         :root {
           color-scheme: dark;
-          --bg: #09111f;
-          --bg-glow: radial-gradient(circle at top left, rgba(56, 189, 248, 0.12), transparent 28%);
-          --panel: rgba(12, 19, 34, 0.88);
-          --panel-2: rgba(9, 16, 29, 0.96);
-          --panel-3: rgba(18, 29, 49, 0.92);
-          --border: rgba(148, 163, 184, 0.16);
-          --border-strong: rgba(96, 165, 250, 0.28);
-          --text: #e6edf7;
-          --muted: #8ea3c0;
-          --page: linear-gradient(135deg, #2563eb, #38bdf8);
-          --interface: linear-gradient(135deg, #d97706, #f59e0b);
-          --backend: linear-gradient(135deg, #7c3aed, #a855f7);
-          --accent: #7dd3fc;
-          --accent-2: #34d399;
-          --shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+          --bg: #000000;
+          --bg-soft: #0a0a0a;
+          --panel: rgba(18, 18, 20, 0.96);
+          --panel-2: rgba(22, 22, 24, 0.96);
+          --panel-3: rgba(28, 28, 31, 0.98);
+          --border: rgba(255, 255, 255, 0.08);
+          --border-strong: rgba(96, 141, 255, 0.34);
+          --text: #b9b9bf;
+          --text-strong: #e6e6eb;
+          --muted: #7e7e87;
+          --page: linear-gradient(135deg, #5b8cff, #7aa2ff);
+          --interface: linear-gradient(135deg, #6f8cff, #8ab4ff);
+          --accent: #8aa4ff;
+          --accent-2: #c5d0ff;
+          --shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
         }
         * { box-sizing: border-box; }
         body {
           margin: 0;
           padding: 20px 20px 28px;
           background: var(--bg);
-          background-image:
-            linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(8, 13, 24, 1)),
-            var(--bg-glow);
           color: var(--text);
           font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         }
@@ -188,8 +190,8 @@ function renderHtml(
           display: flex;
           gap: 12px;
           align-items: center;
-          padding: 2px 0 18px;
-          background: linear-gradient(180deg, rgba(9, 17, 31, 0.98) 78%, rgba(9, 17, 31, 0));
+          padding: 2px 0 14px;
+          background: linear-gradient(180deg, rgba(0, 0, 0, 0.98) 78%, rgba(0, 0, 0, 0));
           backdrop-filter: blur(12px);
         }
         .toolbar input {
@@ -197,20 +199,20 @@ function renderHtml(
           padding: 12px 14px;
           border: 1px solid var(--border);
           border-radius: 12px;
-          background: rgba(8, 15, 27, 0.95);
+          background: var(--panel);
           color: var(--text);
           outline: none;
           transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
         }
         .toolbar input:focus {
           border-color: var(--border-strong);
-          box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.12);
+          box-shadow: 0 0 0 4px rgba(96, 141, 255, 0.12);
           transform: translateY(-1px);
         }
         .toolbar button, .link {
           border: 1px solid var(--border);
           border-radius: 10px;
-          background: rgba(15, 24, 42, 0.88);
+          background: var(--panel);
           color: var(--accent);
           cursor: pointer;
           padding: 7px 11px;
@@ -219,19 +221,48 @@ function renderHtml(
         .toolbar button:hover, .link:hover {
           transform: translateY(-1px);
           border-color: var(--border-strong);
-          background: rgba(23, 37, 64, 0.96);
+          background: var(--panel-3);
           box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
         }
         .stats {
           color: var(--muted);
           white-space: nowrap;
         }
+        .tabs {
+          position: sticky;
+          top: 58px;
+          z-index: 2;
+          display: flex;
+          gap: 10px;
+          padding: 0 0 16px;
+          background: linear-gradient(180deg, rgba(0, 0, 0, 0.98) 80%, rgba(0, 0, 0, 0));
+          backdrop-filter: blur(12px);
+        }
+        .tab {
+          border: 1px solid var(--border);
+          border-radius: 999px;
+          background: var(--panel);
+          color: var(--muted);
+          cursor: pointer;
+          padding: 8px 14px;
+          transition: all 180ms ease;
+        }
+        .tab:hover {
+          color: var(--text-strong);
+          border-color: rgba(255, 255, 255, 0.14);
+        }
+        .tab.active {
+          color: var(--text-strong);
+          border-color: var(--border-strong);
+          background: linear-gradient(135deg, rgba(91, 140, 255, 0.18), rgba(24, 24, 28, 0.96));
+          box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+        }
         .hint {
           margin-bottom: 18px;
           padding: 12px 14px;
           border: 1px solid var(--border);
           border-radius: 14px;
-          background: rgba(10, 17, 30, 0.72);
+          background: var(--panel);
           color: var(--muted);
           box-shadow: var(--shadow);
         }
@@ -258,7 +289,7 @@ function renderHtml(
           padding: 16px 18px;
           cursor: pointer;
           background:
-            linear-gradient(135deg, rgba(37, 99, 235, 0.06), transparent 42%),
+            linear-gradient(135deg, rgba(91, 140, 255, 0.08), transparent 42%),
             rgba(255, 255, 255, 0.02);
         }
         summary::-webkit-details-marker { display: none; }
@@ -302,12 +333,11 @@ function renderHtml(
           border-radius: 999px;
           font-size: 12px;
           font-weight: 700;
-          color: #fff;
+          color: #f5f7ff;
           box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
         }
         .is-page { background: var(--page); }
         .is-interface { background: var(--interface); }
-        .is-backend { background: var(--backend); }
         .content-shell {
           display: grid;
           grid-template-rows: 0fr;
@@ -352,8 +382,8 @@ function renderHtml(
           margin-top: 12px;
           padding: 10px 12px;
           border-radius: 10px;
-          background: linear-gradient(135deg, rgba(52, 211, 153, 0.08), rgba(37, 99, 235, 0.06));
-          border: 1px solid rgba(125, 211, 252, 0.1);
+          background: linear-gradient(135deg, rgba(91, 140, 255, 0.08), rgba(255, 255, 255, 0.02));
+          border: 1px solid rgba(138, 164, 255, 0.14);
         }
         .route-block {
           margin-top: 14px;
@@ -373,16 +403,16 @@ function renderHtml(
           padding: 12px 13px;
           border-radius: 12px;
           background:
-            linear-gradient(135deg, rgba(37, 99, 235, 0.05), transparent 45%),
+            linear-gradient(135deg, rgba(91, 140, 255, 0.06), transparent 45%),
             var(--panel-2);
           border: 1px solid rgba(255, 255, 255, 0.05);
           transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
         }
         .leaf:hover {
           transform: translateX(2px);
-          border-color: rgba(125, 211, 252, 0.18);
+          border-color: rgba(138, 164, 255, 0.2);
           background:
-            linear-gradient(135deg, rgba(37, 99, 235, 0.08), transparent 45%),
+            linear-gradient(135deg, rgba(91, 140, 255, 0.08), transparent 45%),
             var(--panel-3);
         }
         .leaf-main {
@@ -419,28 +449,53 @@ function renderHtml(
       <div class="toolbar">
         <input id="search" type="search" placeholder="搜索 basePath、#路径、controller、目录名" />
         <button id="refresh">刷新</button>
-        <div class="stats">${escapeHtml(workspaceName)} · 顶层路由 ${items.length} 条 · 页面路径 ${totalPageRoutes} 条</div>
+        <div class="stats" id="stats">${escapeHtml(workspaceName)} · 当前 ${items.length}/${items.length} 条 · 页面路径 ${totalPageRoutes} 条</div>
       </div>
-      <div class="hint">入口文件：<code>${escapeHtml(routeFileRelativePath)}</code>。规则：优先从 <code>default.js</code> 找 basePath，再拼 <code>client/route/*/app.*</code> 里的 <code>Route path</code>；没找到页面则标记为“接口”或“后端接口”。</div>
+      <div class="tabs">
+        <button class="tab active" data-filter="all">全部 ${items.length}</button>
+        <button class="tab" data-filter="page">页面 ${pageCount}</button>
+        <button class="tab" data-filter="interface">接口 ${interfaceCount}</button>
+      </div>
+      <div class="hint">扫描范围：<code>${escapeHtml(scanTargetLabel)}</code>。分类规则已和 <code>app/routers</code> 里的 <code>Alt+左键</code> 跳转保持一致：能命中页面入口的归类为“页面”，否则归类为“接口”。</div>
       <div id="list">${itemsHtml || '<div class="empty">没有解析到路由。</div>'}</div>
       <script>
         const vscode = acquireVsCodeApi();
         const bootstrap = ${serialized};
         const searchEl = document.getElementById('search');
         const refreshEl = document.getElementById('refresh');
+        const statsEl = document.getElementById('stats');
         const itemEls = Array.from(document.querySelectorAll('.item'));
+        const tabEls = Array.from(document.querySelectorAll('.tab'));
+        let activeType = 'all';
 
         function applyFilter() {
           const keyword = (searchEl.value || '').trim().toLowerCase();
+          let visibleCount = 0;
           itemEls.forEach((el) => {
             const haystack = el.dataset.search || '';
-            el.classList.toggle('hidden', !!keyword && !haystack.includes(keyword));
+            const typeMatched = activeType === 'all' || el.dataset.type === activeType;
+            const keywordMatched = !keyword || haystack.includes(keyword);
+            const visible = typeMatched && keywordMatched;
+            el.classList.toggle('hidden', !visible);
+            if (visible) {
+              visibleCount += 1;
+            }
           });
+          if (statsEl) {
+            statsEl.textContent = '${escapeHtml(workspaceName)}' + ' · 当前 ' + visibleCount + '/' + bootstrap.itemsLength + ' 条 · 页面路径 ' + bootstrap.totalPageRoutes + ' 条';
+          }
         }
 
         searchEl.addEventListener('input', applyFilter);
         refreshEl.addEventListener('click', () => {
           vscode.postMessage({ type: 'refresh' });
+        });
+        tabEls.forEach((tabEl) => {
+          tabEl.addEventListener('click', () => {
+            activeType = tabEl.dataset.filter || 'all';
+            tabEls.forEach((item) => item.classList.toggle('active', item === tabEl));
+            applyFilter();
+          });
         });
 
         document.addEventListener('click', (event) => {
@@ -457,6 +512,7 @@ function renderHtml(
           }
           vscode.postMessage({ type: 'open', fsPath, line });
         });
+        applyFilter();
       </script>
     </body>
   </html>`;
@@ -509,7 +565,7 @@ export async function showProjectRouteCatalog(
         }
         currentPanel.webview.html = renderHtml(
           currentPanel.webview,
-          refreshed.routerFileRelativePath,
+          refreshed.scanTargetLabel,
           refreshed.items,
           refreshed.workspaceName
         );
@@ -525,7 +581,7 @@ export async function showProjectRouteCatalog(
   currentPanel.title = 'ApiHelper: 项目路由总览';
   currentPanel.webview.html = renderHtml(
     currentPanel.webview,
-    result.routerFileRelativePath,
+    result.scanTargetLabel,
     result.items,
     result.workspaceName
   );

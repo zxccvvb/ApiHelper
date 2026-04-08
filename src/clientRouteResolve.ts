@@ -8,6 +8,7 @@ function normalizeApiPath(apiPath: string): string {
 /**
  * 从 API 路径推导可能的前端 route 目录名（按优先级返回）。
  * - /v2/ump/<module>/... => 优先 <module>
+ * - /erp/a/b => 兼容 a/b 这种多级目录
  * - 兜底：最后一段
  */
 export function inferFolderNamesFromApiPath(apiPath: string): string[] {
@@ -21,6 +22,13 @@ export function inferFolderNamesFromApiPath(apiPath: string): string[] {
   // 典型场景：/v2/ump/<module>/...
   if (segments.length >= 3 && segments[0] === 'v2' && segments[1] === 'ump') {
     candidates.push(segments[2]);
+    for (let i = 2; i < segments.length - 1; i++) {
+      candidates.push(segments.slice(i, segments.length - 1).join('/'));
+    }
+  } else if (segments.length >= 2) {
+    for (let i = 1; i < segments.length; i++) {
+      candidates.push(segments.slice(i).join('/'));
+    }
   }
 
   const last = segments[segments.length - 1];
@@ -94,5 +102,28 @@ export async function findClientEntryByApiPath(
       return uri;
     }
   }
+  return null;
+}
+
+export async function findClientEntryByApiPaths(
+  apiPaths: string[],
+  token?: vscode.CancellationToken,
+  preferredFolderName?: string
+): Promise<vscode.Uri | null> {
+  const tried = new Set<string>();
+
+  for (const apiPath of apiPaths) {
+    const normalized = normalizeApiPath(apiPath);
+    if (!normalized || tried.has(normalized)) {
+      continue;
+    }
+    tried.add(normalized);
+
+    const uri = await findClientEntryByApiPath(normalized, token, preferredFolderName);
+    if (uri) {
+      return uri;
+    }
+  }
+
   return null;
 }
