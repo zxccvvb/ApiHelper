@@ -30,6 +30,10 @@ function inferRouterFileFolderName(document: vscode.TextDocument): string | unde
   return m?.[1];
 }
 
+function isApiStylePath(apiPath: string): boolean {
+  return /\/api(?:\/|$)/.test(apiPath);
+}
+
 async function openAt(uri: vscode.Uri, pos: vscode.Position): Promise<void> {
   const doc = await vscode.workspace.openTextDocument(uri);
   const ed = await vscode.window.showTextDocument(doc, {
@@ -61,22 +65,25 @@ export function activate(context: vscode.ExtensionContext): void {
           return null;
         }
         if (isAppRouterFile(document)) {
-          const preferredFolderName = inferRouterFileFolderName(document);
-          const clientUri = await findClientEntryByApiPath(
-            hit.apiPath,
-            token,
-            preferredFolderName
-          );
-          if (clientUri) {
-            const targetPos = new vscode.Position(0, 0);
-            const targetRange = new vscode.Range(targetPos, targetPos);
-            const link: vscode.LocationLink = {
-              originSelectionRange: hit.originRange,
-              targetUri: clientUri,
-              targetRange,
-              targetSelectionRange: targetRange
-            };
-            return [link];
+          // /api/ 路由一律视为接口，不做 router -> client 页面入口跳转
+          if (!isApiStylePath(hit.apiPath)) {
+            const preferredFolderName = inferRouterFileFolderName(document);
+            const clientUri = await findClientEntryByApiPath(
+              hit.apiPath,
+              token,
+              preferredFolderName
+            );
+            if (clientUri) {
+              const targetPos = new vscode.Position(0, 0);
+              const targetRange = new vscode.Range(targetPos, targetPos);
+              const link: vscode.LocationLink = {
+                originSelectionRange: hit.originRange,
+                targetUri: clientUri,
+                targetRange,
+                targetSelectionRange: targetRange
+              };
+              return [link];
+            }
           }
         }
 

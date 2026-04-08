@@ -48,6 +48,10 @@ export interface RouteCatalogResult {
 const HTTP_METHOD_RE = /\[\s*['"](GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)['"]/gi;
 const ROUTER_CATALOG_GLOB = '**/app/routers/**/*.js';
 
+function isApiStylePath(apiPath: string): boolean {
+  return /\/api(?:\/|$)/.test(apiPath);
+}
+
 function getWorkspaceRoot(): { root: string; name: string } | null {
   const folders = vscode.workspace.workspaceFolders;
   if (!folders?.length) {
@@ -430,12 +434,15 @@ export async function scanProjectRouteCatalog(
         handlerMethod,
         parts[1]
       );
-      const clientEntry = await resolveClientEntry(
-        basePaths,
-        preferredFolderName,
-        folderCandidates,
-        token
-      );
+      const hasApiStyleBasePath = basePaths.some((item) => isApiStylePath(item));
+      const clientEntry = hasApiStyleBasePath
+        ? undefined
+        : await resolveClientEntry(
+          basePaths,
+          preferredFolderName,
+          folderCandidates,
+          token
+        );
       const clientRouteDefs = clientEntry
         ? await parseClientRoutes(clientEntry.fsPath, token)
         : [];
