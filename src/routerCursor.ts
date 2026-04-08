@@ -4,14 +4,26 @@ import {
   extractBalancedRoute,
   extractHandlerMethod,
   findHandlerLine,
-  findRouteStartOnLine,
   resolveControllerRef,
   resolveExistingControllerPath,
   splitRouteElements
 } from './nodeRouteResolve';
 
+function findRouteStartBefore(content: string, index: number): number {
+  const before = content.slice(0, index);
+  let lastStart = -1;
+  const re = /\[\s*['"](GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)['"]/gi;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(before)) !== null) {
+    lastStart = match.index;
+  }
+  return lastStart;
+}
+
 /**
- * 在 app/routers 中点击 Controller 引用或 handler 方法名字符串时，直接跳到对应 Controller 方法实现。
+ * 在 app/routers 中点击 Controller 引用或 handler 方法名字符串时：
+ * - 点击 Controller：进入对应 Controller 文件
+ * - 点击 handler：进入对应 Controller 方法
  * （路径字符串由 getApiPathAtPosition + findRouteForPath 处理）
  */
 export async function resolveRouterDirectHandler(
@@ -33,12 +45,15 @@ export async function resolveRouterDirectHandler(
   if (text.startsWith('/')) {
     return undefined;
   }
-  const line = document.lineAt(position.line).text;
-  const routeStart = findRouteStartOnLine(line, position.character);
+  const fullContent = document.getText();
+  const routeStart = findRouteStartBefore(
+    fullContent,
+    document.offsetAt(expand.start)
+  );
   if (routeStart < 0) {
     return undefined;
   }
-  const routeStr = extractBalancedRoute(line, routeStart);
+  const routeStr = extractBalancedRoute(fullContent, routeStart);
   if (!routeStr) {
     return undefined;
   }
@@ -46,7 +61,6 @@ export async function resolveRouterDirectHandler(
   if (parts.length < 4) {
     return undefined;
   }
-  const fullContent = document.getText();
   const controllerRef = resolveControllerRef(parts[2], fullContent);
   const handlerMethod = extractHandlerMethod(parts[3]);
   if (!controllerRef || !handlerMethod) {
@@ -73,8 +87,9 @@ export async function resolveRouterDirectHandler(
     return undefined;
   }
   const ctrlContent = (await vscode.workspace.fs.readFile(controllerUri)).toString();
-  const handlerLine = findHandlerLine(ctrlContent, handlerMethod);
-  const line0 = Math.max(0, handlerLine - 1);
+  const line0 = text === controllerRef
+    ? 0
+    : Math.max(0, findHandlerLine(ctrlContent, handlerMethod) - 1);
   const targetPos = new vscode.Position(line0, 0);
   const targetRange = new vscode.Range(targetPos, targetPos);
   return {
