@@ -16,6 +16,11 @@
 [命令标题] ApiHelper: 通过完整 URL 跳转路由
 ```
 
+```txt
+[命令 ID] apiHelper.showProjectRouteCatalog
+[命令标题] ApiHelper: 查看项目路由总览
+```
+
 ## 能力说明
 
 ```txt
@@ -39,6 +44,12 @@
 [能力-4] 输入完整 URL 直接定位 router
 执行命令后弹输入框，可输入任意域名的完整 URL，
 插件会自动提取 pathname（例如 /v2/ump/mobile-order）并定位到 app/routers 中对应路由行。
+```
+
+```txt
+[能力-5] 可视化列出项目路由
+从 app/routers/default.js 读取顶层路由列表，再尝试关联 client/route/*/app.* 中注册的 Route path，
+最终将每个页面展示为 basePath#subPath 的形式，并在面板中提供搜索、展开、跳转源码能力。
 ```
 
 ## 使用方法（按代码位置）
@@ -83,6 +94,12 @@ const api = '/v2/ump/api/appointment-decoration/query-page-list';
 // 对这段路径触发跳转 -> 跳到 app/routers/appointment-decoration.js 对应路由项
 ```
 
+```txt
+[用法-D] 直接查看整个项目的路由总览
+触发方式：执行命令 apiHelper.showProjectRouteCatalog
+结果：打开一个可视化面板，列出 default.js 中每一条顶层路由，并尽量补齐对应 page 路由
+```
+
 ## 匹配规则
 
 ```txt
@@ -101,6 +118,27 @@ const api = '/v2/ump/api/appointment-decoration/query-page-list';
 3) 命中即跳转
 ```
 
+```txt
+[项目路由总览规则]
+1) 先读取 app/routers/default.js 中的每一条路由
+2) 取第二段 path：
+   - 普通字符串：直接作为 basePath
+   - registerApp(...)：提取其中的绝对路径作为 basePath
+3) 推断 page 目录名，优先级如下：
+   - registerApp('@scope/<folder>')
+   - controller 引用前缀（如 finacial.IndexController -> finacial）
+   - basePath 推导出的最后一个 segment
+4) 在 client/route/<folder>/ 下按优先级查找入口：
+   app.tsx -> app.jsx -> app.ts -> app.js -> main.tsx -> main.jsx -> main.ts -> main.js
+5) 从入口文件里提取每个 <Route path="..."> 或 <Route path={['/...']} >
+6) 将结果拼成 basePath#subPath，例如：
+   /v2/data/report#/report/StaffExchange
+   /v2/data/finacial#/prepaid/:type
+7) 若未找到 page：
+   - handler 是 getIndexHtml -> 标记为“接口”
+   - 其他 handler -> 标记为“后端接口”
+```
+
 ## 典型示例
 
 ```txt
@@ -114,4 +152,31 @@ client/route/appointment-decoration/app.jsx
 [示例-2]
 app/routers/appointment-decoration.js 中 '/v2/ump/appointment-decoration'
 -> client/route/appointment-decoration/app.jsx
+```
+
+```txt
+[示例-3]
+app/routers/default.js
+-> registerApp('@retail-node-data/report', '/v2/data/report')
+-> client/route/report/app.tsx
+-> /v2/data/report#/report/StaffExchange
+-> /v2/data/report#/report/DailyReportDetail
+-> /v2/data/report#/report/:reportType
+```
+
+```txt
+[示例-4]
+app/routers/default.js
+-> registerApp('@retail-node-data/finacial', '/v2/data/finacial')
+-> client/route/finacial/app.jsx
+-> /v2/data/finacial#/
+-> /v2/data/finacial#/prepaid/:type
+```
+
+```txt
+[示例-5]
+app/routers/default.js
+-> ['GET', '/v2/data/dashboard/getLiteStore', 'dashboard.IndexController', 'getLiteStore']
+-> 未命中 page
+-> 在总览中显示为“后端接口”
 ```

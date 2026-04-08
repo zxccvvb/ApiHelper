@@ -14,6 +14,7 @@ import {
   findRouteForFolderName,
   findRouteForPath
 } from './nodeRouteResolve';
+import { showProjectRouteCatalog } from './projectRouteView';
 import { resolveRouterDirectHandler } from './routerCursor';
 
 const DEFINITION_SELECTOR: vscode.DocumentSelector = [
@@ -225,7 +226,19 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   );
 
-  context.subscriptions.push(definitionProvider, disposable, openByFullInputDisposable);
+  const showProjectRouteCatalogDisposable = vscode.commands.registerCommand(
+    'apiHelper.showProjectRouteCatalog',
+    async () => {
+      await showProjectRouteCatalog(context);
+    }
+  );
+
+  context.subscriptions.push(
+    definitionProvider,
+    disposable,
+    openByFullInputDisposable,
+    showProjectRouteCatalogDisposable
+  );
 }
 
 export function deactivate(): void {}

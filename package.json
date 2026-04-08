@@ -1,7 +1,7 @@
 {
   "name": "api-helper",
   "displayName": "ApiHelper",
-  "description": "快速定位：前端请求的 /v2/... 经本项目 Node 转发（路由注册）后，由哪段 Router、哪个 Controller 方法实际处理——从字符串一键跳到实现。",
+  "description": "retail-node 系列的 B 端提效插件，支持路由定位、页面入口反查与项目路由总览。",
   "version": "1.0.0",
   "icon": "images/icon.png",
   "publisher": "mo9on",
@@ -33,6 +33,10 @@
       {
         "command": "apiHelper.goToNodeHandlerByFullPath",
         "title": "ApiHelper: 通过完整 URL 跳转路由"
+      },
+      {
+        "command": "apiHelper.showProjectRouteCatalog",
+        "title": "ApiHelper: 查看项目路由总览"
       }
     ],
     "menus": {
@@ -44,6 +48,10 @@
         {
           "command": "apiHelper.goToNodeHandlerByFullPath",
           "group": "navigation@101"
+        },
+        {
+          "command": "apiHelper.showProjectRouteCatalog",
+          "group": "navigation@102"
         }
       ]
     }
