@@ -36,6 +36,10 @@ function renderLeaf(leaf: RouteCatalogLeaf): string {
         <code class="full-path">${escapeHtml(leaf.fullPath)}</code>
         <button
           class="link"
+          data-copy-text="${escapeHtml(leaf.fullPath)}"
+        >复制路径</button>
+        <button
+          class="link"
           data-open-path="${escapeHtml(leaf.sourceFsPath)}"
           data-open-line="${leaf.sourceLine}"
         >打开前端路由</button>
@@ -88,6 +92,10 @@ function renderItem(item: RouteCatalogItem): string {
           <code>${escapeHtml(item.basePaths.join(' , '))}</code>
         </div>
         <div class="summary-side">
+          <button
+            class="link summary-copy"
+            data-copy-text="${escapeHtml(item.basePaths.join(' , '))}"
+          >复制路径</button>
           <span class="summary-method">${escapeHtml(item.httpMethod)}</span>
           <span class="summary-arrow" aria-hidden="true"></span>
         </div>
@@ -313,6 +321,10 @@ function renderHtml(
         .summary-method {
           letter-spacing: 0.06em;
         }
+        .summary-copy {
+          position: relative;
+          z-index: 1;
+        }
         .summary-arrow {
           width: 10px;
           height: 10px;
@@ -499,14 +511,24 @@ function renderHtml(
         });
 
         document.addEventListener('click', (event) => {
-          const target = event.target instanceof HTMLElement
-            ? event.target.closest('[data-open-path]')
+          const element = event.target instanceof HTMLElement
+            ? event.target.closest('[data-copy-text], [data-open-path]')
             : null;
-          if (!target) {
+          if (!element) {
             return;
           }
-          const fsPath = target.getAttribute('data-open-path');
-          const line = Number(target.getAttribute('data-open-line') || '1');
+
+          event.preventDefault();
+          event.stopPropagation();
+
+          const copyText = element.getAttribute('data-copy-text');
+          if (copyText) {
+            vscode.postMessage({ type: 'copy', text: copyText });
+            return;
+          }
+
+          const fsPath = element.getAttribute('data-open-path');
+          const line = Number(element.getAttribute('data-open-line') || '1');
           if (!fsPath) {
             return;
           }
@@ -557,7 +579,7 @@ export async function showProjectRouteCatalog(
         return;
       }
 
-      const payload = message as { type?: string; fsPath?: string; line?: number };
+      const payload = message as { type?: string; fsPath?: string; line?: number; text?: string };
       if (payload.type === 'refresh') {
         const refreshed = await scanProjectRouteCatalog();
         if (!currentPanel) {
@@ -574,6 +596,11 @@ export async function showProjectRouteCatalog(
 
       if (payload.type === 'open' && payload.fsPath) {
         await openFileAtLine(payload.fsPath, payload.line || 1);
+      }
+
+      if (payload.type === 'copy' && typeof payload.text === 'string') {
+        await vscode.env.clipboard.writeText(payload.text);
+        void vscode.window.setStatusBarMessage('ApiHelper: 已复制路径', 1500);
       }
     }, null, context.subscriptions);
   }
