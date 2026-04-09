@@ -17,7 +17,7 @@ function escapeHtml(value: string): string {
 
 function getTypeLabel(type: RouteCatalogItem['type']): string {
   if (type === 'page') {
-    return '页面';
+    return '路由';
   }
   return '接口';
 }
@@ -38,7 +38,7 @@ function renderLeaf(leaf: RouteCatalogLeaf): string {
           class="link"
           data-open-path="${escapeHtml(leaf.sourceFsPath)}"
           data-open-line="${leaf.sourceLine}"
-        >打开 page 路由</button>
+        >打开前端路由</button>
       </div>
       <div class="meta">
         <span>${escapeHtml(leaf.sourceRelativePath)}</span>
@@ -66,10 +66,10 @@ function renderItem(item: RouteCatalogItem): string {
         class="link"
         data-open-path="${escapeHtml(item.clientEntryFsPath || '')}"
         data-open-line="1"
-      >打开 page 入口</button>
+      >打开前端入口</button>
       <span>${escapeHtml(item.clientEntryRelativePath)}</span>
     `
-    : '<span>未找到 page 入口</span>';
+    : '<span>未找到前端入口</span>';
 
   const routeList = item.clientRoutes.length
     ? `<ul class="leaf-list">${item.clientRoutes.map(renderLeaf).join('')}</ul>`
@@ -107,7 +107,7 @@ function renderItem(item: RouteCatalogItem): string {
           </div>
         </div>
         <div class="row">
-          <strong>Page</strong>
+          <strong>前端入口</strong>
           <div class="row-main">${pageInfo}</div>
         </div>
         <div class="row">
@@ -449,14 +449,14 @@ function renderHtml(
       <div class="toolbar">
         <input id="search" type="search" placeholder="搜索 basePath、#路径、controller、目录名" />
         <button id="refresh">刷新</button>
-        <div class="stats" id="stats">${escapeHtml(workspaceName)} · 当前 ${items.length}/${items.length} 条 · 页面路径 ${totalPageRoutes} 条</div>
+        <div class="stats" id="stats">${escapeHtml(workspaceName)} · 当前 ${items.length}/${items.length} 条 · 路由子路径 ${totalPageRoutes} 条</div>
       </div>
       <div class="tabs">
         <button class="tab active" data-filter="all">全部 ${items.length}</button>
-        <button class="tab" data-filter="page">页面 ${pageCount}</button>
+        <button class="tab" data-filter="page">路由 ${pageCount}</button>
         <button class="tab" data-filter="interface">接口 ${interfaceCount}</button>
       </div>
-      <div class="hint">扫描范围：<code>${escapeHtml(scanTargetLabel)}</code>。分类规则已和 <code>app/routers</code> 里的 <code>Alt+左键</code> 跳转保持一致：能命中页面入口的归类为“页面”，否则归类为“接口”。</div>
+      <div class="hint">扫描范围：<code>${escapeHtml(scanTargetLabel)}</code>。分类规则已和 <code>app/routers</code> 里的 <code>Alt+左键</code> 跳转保持一致：handler 以 <code>Html</code> 结尾的归类为“路由”，其余归类为“接口”；只有“路由”才会尝试解析前端入口。</div>
       <div id="list">${itemsHtml || '<div class="empty">没有解析到路由。</div>'}</div>
       <script>
         const vscode = acquireVsCodeApi();
@@ -482,7 +482,7 @@ function renderHtml(
             }
           });
           if (statsEl) {
-            statsEl.textContent = '${escapeHtml(workspaceName)}' + ' · 当前 ' + visibleCount + '/' + bootstrap.itemsLength + ' 条 · 页面路径 ' + bootstrap.totalPageRoutes + ' 条';
+            statsEl.textContent = '${escapeHtml(workspaceName)}' + ' · 当前 ' + visibleCount + '/' + bootstrap.itemsLength + ' 条 · 路由子路径 ' + bootstrap.totalPageRoutes + ' 条';
           }
         }
 

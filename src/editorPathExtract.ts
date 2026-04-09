@@ -14,6 +14,74 @@ export function normalizePath(p: string): string {
   return s;
 }
 
+function extractApiLikeLiteral(value: string): string | undefined {
+  const matches = [...value.matchAll(/['"`](\/(?:v2|wscump)\/[^'"`]*)['"`]/g)];
+  return matches[0]?.[1];
+}
+
+function collectConstExpressions(content: string): Map<string, string> {
+  const expressions = new Map<string, string>();
+  const constRe =
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([\s\S]*?);/g;
+  let match: RegExpExecArray | null;
+  while ((match = constRe.exec(content)) !== null) {
+    expressions.set(match[1], match[2].trim());
+  }
+  return expressions;
+}
+
+function resolveApiPathFromExpression(
+  expression: string,
+  expressions: Map<string, string>,
+  visited = new Set<string>()
+): string | undefined {
+  const trimmed = expression.trim();
+  const direct = extractApiLikeLiteral(trimmed);
+  if (direct) {
+    return normalizePath(direct);
+  }
+
+  if (/^[A-Za-z_$][\w$]*$/.test(trimmed)) {
+    if (visited.has(trimmed)) {
+      return undefined;
+    }
+    const next = expressions.get(trimmed);
+    if (!next) {
+      return undefined;
+    }
+    visited.add(trimmed);
+    return resolveApiPathFromExpression(next, expressions, visited);
+  }
+
+  return undefined;
+}
+
+function resolveApiPathFromIdentifier(
+  doc: vscode.TextDocument,
+  identifier: string
+): string | undefined {
+  const expressions = collectConstExpressions(doc.getText());
+  const expression = expressions.get(identifier);
+  if (!expression) {
+    return undefined;
+  }
+  return resolveApiPathFromExpression(expression, expressions);
+}
+
+function getIdentifierAtPosition(
+  doc: vscode.TextDocument,
+  pos: vscode.Position
+): { text: string; range: vscode.Range } | undefined {
+  const range = doc.getWordRangeAtPosition(pos, /[A-Za-z_$][\w$]*/);
+  if (!range) {
+    return undefined;
+  }
+  return {
+    text: doc.getText(range),
+    range
+  };
+}
+
 function normalizeApiLikePath(p: string): string {
   const noQueryOrHash = p.split(/[?#]/)[0];
   const normalized = normalizePath(noQueryOrHash);
@@ -139,6 +207,17 @@ export function getApiPathAtPosition(
     }
   }
 
+  const identifier = getIdentifierAtPosition(doc, pos);
+  if (identifier) {
+    const resolvedPath = resolveApiPathFromIdentifier(doc, identifier.text);
+    if (resolvedPath) {
+      return {
+        apiPath: resolvedPath,
+        originRange: identifier.range
+      };
+    }
+  }
+
   return undefined;
 }
 
@@ -174,6 +253,11 @@ export function extractApiPath(editor: vscode.TextEditor): string | undefined {
     if (t.startsWith('/')) {
       return normalizePath(t);
     }
+  }
+
+  const identifier = getIdentifierAtPosition(doc, pos);
+  if (identifier) {
+    return resolveApiPathFromIdentifier(doc, identifier.text);
   }
 
   return undefined;

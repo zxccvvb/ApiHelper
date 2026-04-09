@@ -120,6 +120,70 @@ function findRouteStartBefore(content: string, pathIndex: number): number {
   return lastStart;
 }
 
+export function isHtmlHandlerMethod(handlerMethod: string | null | undefined): boolean {
+  return !!handlerMethod && /html$/i.test(handlerMethod.trim());
+}
+
+export function resolveRouteHandlerMethodAtIndex(
+  content: string,
+  index: number
+): string | null {
+  const routeStart = findRouteStartBefore(content, index);
+  if (routeStart < 0) {
+    return null;
+  }
+  const routeStr = extractBalancedRoute(content, routeStart);
+  if (!routeStr) {
+    return null;
+  }
+  const parts = splitRouteElements(routeStr);
+  if (parts.length < 4) {
+    return null;
+  }
+  return extractHandlerMethod(parts[3]);
+}
+
+function normalizeFolderLookupKey(folderName: string): string {
+  return folderName
+    .split('/')
+    .filter(Boolean)
+    .map((segment) => segment.toLowerCase().replace(/-/g, ''))
+    .join('/');
+}
+
+function collectRouteFolderCandidates(routePath: string): string[] {
+  const trimmed = routePath.split('?')[0].replace(/\/+$/, '');
+  const segments = trimmed.split('/').filter(Boolean);
+  if (!segments.length) {
+    return [];
+  }
+
+  const candidates: string[] = [];
+  const push = (value: string): void => {
+    if (value) {
+      candidates.push(value);
+    }
+  };
+
+  push(segments[segments.length - 1]);
+
+  if (segments.length >= 3 && segments[0] === 'v2' && segments[1] === 'ump') {
+    push(segments[2]);
+    for (let i = 2; i < segments.length; i++) {
+      push(segments.slice(i).join('/'));
+    }
+  }
+
+  if (segments.length >= 2 && segments[0] === 'wscump') {
+    push(segments[1]);
+    for (let i = 1; i < segments.length; i++) {
+      push(segments.slice(i).join('/'));
+    }
+  }
+
+  return [...new Set(candidates)];
+}
+
 export function extractBalancedRoute(
   content: string,
   routeStart: number
@@ -422,31 +486,10 @@ export async function findRouteForPath(
 }
 
 function routePathMatchesFolderName(routePath: string, folderName: string): boolean {
-  const trimmed = routePath.split('?')[0].replace(/\/+$/, '');
-  const segments = trimmed.split('/').filter(Boolean);
-  if (!segments.length) {
-    return false;
-  }
-  const last = segments[segments.length - 1];
-  if (last === folderName) {
-    return true;
-  }
-
-  // 典型路由：/v2/ump/<module>/...
-  if (segments.length >= 3 && segments[0] === 'v2' && segments[1] === 'ump') {
-    if (segments[2] === folderName) {
-      return true;
-    }
-  }
-
-  // 兼容 /wscump/<module>/...
-  if (segments.length >= 2 && segments[0] === 'wscump') {
-    if (segments[1] === folderName) {
-      return true;
-    }
-  }
-
-  return false;
+  const want = normalizeFolderLookupKey(folderName);
+  return collectRouteFolderCandidates(routePath).some(
+    (candidate) => normalizeFolderLookupKey(candidate) === want
+  );
 }
 
 function normalizeRouteComparePath(p: string): string {
@@ -494,6 +537,7 @@ export function routePathPartMatchesFolderName(
   pathPart: string,
   folderName: string
 ): boolean {
+  const want = normalizeFolderLookupKey(folderName);
   const t = pathPart.trim();
   const simple = t.match(/^['"]([^'"]+)['"]$/);
   if (simple) {
@@ -503,11 +547,11 @@ export function routePathPartMatchesFolderName(
     const firstArgM = t.match(/registerApp\s*\(\s*['"]([^'"]+)['"]/);
     if (firstArgM) {
       const pkgPath = microAppArgToRelativePath(firstArgM[1]);
-      if (pkgPath === folderName) {
+      if (normalizeFolderLookupKey(pkgPath) === want) {
         return true;
       }
       const segs = pkgPath.split('/');
-      if (segs[segs.length - 1] === folderName) {
+      if (normalizeFolderLookupKey(segs[segs.length - 1]) === want) {
         return true;
       }
     }

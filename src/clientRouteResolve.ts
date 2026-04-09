@@ -5,6 +5,48 @@ function normalizeApiPath(apiPath: string): string {
   return apiPath.split('?')[0].replace(/\/+$/, '');
 }
 
+function normalizeFolderSegment(segment: string): string {
+  return segment.trim().replace(/-/g, '');
+}
+
+function dedupeList(items: string[]): string[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (!item || seen.has(item)) {
+      return false;
+    }
+    seen.add(item);
+    return true;
+  });
+}
+
+function expandFolderNameVariants(folderName: string): string[] {
+  const normalized = folderName
+    .split('/')
+    .filter(Boolean)
+    .map((segment) => normalizeFolderSegment(segment))
+    .join('/');
+  return dedupeList([folderName, normalized]);
+}
+
+function inferSubFoldersFromHandlerMethod(handlerMethod?: string): string[] {
+  if (!handlerMethod) {
+    return [];
+  }
+  const match = handlerMethod.match(/^get([A-Z][A-Za-z0-9]*)Html$/);
+  if (!match) {
+    return [];
+  }
+  const rawName = match[1];
+  if (/^index$/i.test(rawName)) {
+    return ['list', 'index'];
+  }
+  const kebab = rawName
+    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .toLowerCase();
+  return dedupeList([kebab, normalizeFolderSegment(kebab)]);
+}
+
 /**
  * 从 API 路径推导可能的前端 route 目录名（按优先级返回）。
  * - /v2/ump/<module>/... => 优先 <module>
@@ -22,8 +64,8 @@ export function inferFolderNamesFromApiPath(apiPath: string): string[] {
   // 典型场景：/v2/ump/<module>/...
   if (segments.length >= 3 && segments[0] === 'v2' && segments[1] === 'ump') {
     candidates.push(segments[2]);
-    for (let i = 2; i < segments.length - 1; i++) {
-      candidates.push(segments.slice(i, segments.length - 1).join('/'));
+    for (let i = 2; i < segments.length; i++) {
+      candidates.push(segments.slice(i).join('/'));
     }
   } else if (segments.length >= 2) {
     for (let i = 1; i < segments.length; i++) {
@@ -36,14 +78,34 @@ export function inferFolderNamesFromApiPath(apiPath: string): string[] {
     candidates.push(last);
   }
 
-  const seen = new Set<string>();
-  return candidates.filter((name) => {
-    if (!name || seen.has(name)) {
-      return false;
-    }
-    seen.add(name);
-    return true;
-  });
+  return dedupeList(candidates.flatMap((name) => expandFolderNameVariants(name)));
+}
+
+function buildFolderNamesForLookup(
+  apiPath: string,
+  preferredFolderName?: string,
+  handlerMethod?: string
+): string[] {
+  const apiDerivedNames = inferFolderNamesFromApiPath(apiPath);
+  const preferredNames = preferredFolderName
+    ? expandFolderNameVariants(preferredFolderName)
+    : [];
+  const baseFolderNames = dedupeList([
+    ...preferredNames,
+    ...apiDerivedNames.filter((name) => !name.includes('/'))
+  ]);
+  const subFolders = inferSubFoldersFromHandlerMethod(handlerMethod);
+  const handlerDerivedNames = baseFolderNames.flatMap((baseName) =>
+    subFolders.flatMap((subFolder) =>
+      expandFolderNameVariants(`${baseName}/${subFolder}`)
+    )
+  );
+
+  return dedupeList([
+    ...preferredNames,
+    ...handlerDerivedNames,
+    ...apiDerivedNames
+  ]);
 }
 
 /**
@@ -61,19 +123,21 @@ export async function findClientEntryByFolderName(
   const root = folders[0].uri.fsPath;
   const candidates = ['app.tsx', 'app.jsx', 'app.ts', 'app.js', 'main.tsx', 'main.jsx', 'main.ts', 'main.js'];
 
-  for (const fileName of candidates) {
-    if (token?.isCancellationRequested) {
-      return null;
-    }
-    const fsPath = path.join(root, 'client', 'route', folderName, fileName);
-    const uri = vscode.Uri.file(fsPath);
-    try {
-      const st = await vscode.workspace.fs.stat(uri);
-      if (st.type === vscode.FileType.File) {
-        return uri;
+  for (const folderVariant of expandFolderNameVariants(folderName)) {
+    for (const fileName of candidates) {
+      if (token?.isCancellationRequested) {
+        return null;
       }
-    } catch {
-      // try next candidate
+      const fsPath = path.join(root, 'client', 'route', folderVariant, fileName);
+      const uri = vscode.Uri.file(fsPath);
+      try {
+        const st = await vscode.workspace.fs.stat(uri);
+        if (st.type === vscode.FileType.File) {
+          return uri;
+        }
+      } catch {
+        // try next candidate
+      }
     }
   }
   return null;
@@ -82,14 +146,14 @@ export async function findClientEntryByFolderName(
 export async function findClientEntryByApiPath(
   apiPath: string,
   token?: vscode.CancellationToken,
-  preferredFolderName?: string
+  preferredFolderName?: string,
+  handlerMethod?: string
 ): Promise<vscode.Uri | null> {
-  const folderNames: string[] = [
-    ...inferFolderNamesFromApiPath(apiPath)
-  ];
-  if (preferredFolderName) {
-    folderNames.push(preferredFolderName);
-  }
+  const folderNames = buildFolderNamesForLookup(
+    apiPath,
+    preferredFolderName,
+    handlerMethod
+  );
 
   const tried = new Set<string>();
   for (const folderName of folderNames) {
@@ -108,7 +172,8 @@ export async function findClientEntryByApiPath(
 export async function findClientEntryByApiPaths(
   apiPaths: string[],
   token?: vscode.CancellationToken,
-  preferredFolderName?: string
+  preferredFolderName?: string,
+  handlerMethod?: string
 ): Promise<vscode.Uri | null> {
   const tried = new Set<string>();
 
@@ -119,7 +184,12 @@ export async function findClientEntryByApiPaths(
     }
     tried.add(normalized);
 
-    const uri = await findClientEntryByApiPath(normalized, token, preferredFolderName);
+    const uri = await findClientEntryByApiPath(
+      normalized,
+      token,
+      preferredFolderName,
+      handlerMethod
+    );
     if (uri) {
       return uri;
     }

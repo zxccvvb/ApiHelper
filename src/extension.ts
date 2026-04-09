@@ -9,10 +9,12 @@ import {
   parseApiPathFromInput
 } from './editorPathExtract';
 import {
+  isHtmlHandlerMethod,
   findPathTextInRouteFiles,
   findRouteForControllerDirName,
   findRouteForFolderName,
-  findRouteForPath
+  findRouteForPath,
+  resolveRouteHandlerMethodAtIndex
 } from './nodeRouteResolve';
 import { showProjectRouteCatalog } from './projectRouteView';
 import { resolveRouterDirectHandler } from './routerCursor';
@@ -28,10 +30,6 @@ function inferRouterFileFolderName(document: vscode.TextDocument): string | unde
   const fsPath = document.uri.fsPath.replace(/\\/g, '/');
   const m = fsPath.match(/\/app\/routers\/([^/]+)\.(js|ts)$/);
   return m?.[1];
-}
-
-function isApiStylePath(apiPath: string): boolean {
-  return /\/api(?:\/|$)/.test(apiPath);
 }
 
 async function openAt(uri: vscode.Uri, pos: vscode.Position): Promise<void> {
@@ -65,13 +63,17 @@ export function activate(context: vscode.ExtensionContext): void {
           return null;
         }
         if (isAppRouterFile(document)) {
-          // /api/ 路由一律视为接口，不做 router -> client 页面入口跳转
-          if (!isApiStylePath(hit.apiPath)) {
+          const handlerMethod = resolveRouteHandlerMethodAtIndex(
+            document.getText(),
+            document.offsetAt(hit.originRange.start)
+          );
+          if (isHtmlHandlerMethod(handlerMethod)) {
             const preferredFolderName = inferRouterFileFolderName(document);
             const clientUri = await findClientEntryByApiPath(
               hit.apiPath,
               token,
-              preferredFolderName
+              preferredFolderName,
+              handlerMethod || undefined
             );
             if (clientUri) {
               const targetPos = new vscode.Position(0, 0);

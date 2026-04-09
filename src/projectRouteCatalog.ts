@@ -8,6 +8,7 @@ import {
 import {
   extractBalancedRoute,
   extractHandlerMethod,
+  isHtmlHandlerMethod,
   resolveControllerRef,
   splitRouteElements
 } from './nodeRouteResolve';
@@ -47,10 +48,6 @@ export interface RouteCatalogResult {
 
 const HTTP_METHOD_RE = /\[\s*['"](GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)['"]/gi;
 const ROUTER_CATALOG_GLOB = '**/app/routers/**/*.js';
-
-function isApiStylePath(apiPath: string): boolean {
-  return /\/api(?:\/|$)/.test(apiPath);
-}
 
 function getWorkspaceRoot(): { root: string; name: string } | null {
   const folders = vscode.workspace.workspaceFolders;
@@ -123,7 +120,7 @@ function buildFolderCandidates(
   pathPart: string
 ): string[] {
   const registerAppFolder = extractRegisterAppFolder(pathPart);
-  const isPageLike = !!registerAppFolder || !!(handlerMethod && /^getindexhtml$/i.test(handlerMethod));
+  const isPageLike = !!registerAppFolder || isHtmlHandlerMethod(handlerMethod);
   const candidates = [
     registerAppFolder,
     ...(isPageLike ? [extractControllerFolder(controllerRef)] : []),
@@ -143,12 +140,14 @@ async function resolveClientEntry(
   basePaths: string[],
   preferredFolderName: string | undefined,
   folderCandidates: string[],
+  handlerMethod: string | null,
   token?: vscode.CancellationToken
 ): Promise<{ fsPath: string; relativePath: string } | undefined> {
   const apiMatchedUri = await findClientEntryByApiPaths(
     basePaths,
     token,
-    preferredFolderName
+    preferredFolderName,
+    handlerMethod || undefined
   );
   if (apiMatchedUri) {
     return {
@@ -352,13 +351,16 @@ async function parseClientRoutes(
   return items;
 }
 
-function buildRouteNote(type: RouteCatalogItemType, clientEntryRelativePath?: string): string {
+function buildRouteNote(
+  type: RouteCatalogItemType,
+  clientEntryRelativePath?: string
+): string {
   if (type === 'page') {
     return clientEntryRelativePath
-      ? `已找到页面入口：${clientEntryRelativePath}`
-      : '已找到页面入口';
+      ? `已按 Html 路由识别，并找到前端入口：${clientEntryRelativePath}`
+      : '已按 Html 路由识别，但未找到前端入口';
   }
-  return '未命中页面入口，按接口展示';
+  return 'handler 非 Html，按接口展示';
 }
 
 function buildLeafRoutes(basePaths: string[], clientRoutes: RouteCatalogLeaf[]): RouteCatalogLeaf[] {
@@ -428,27 +430,28 @@ export async function scanProjectRouteCatalog(
 
       const controllerRef = resolveControllerRef(parts[2], routerContent);
       const handlerMethod = extractHandlerMethod(parts[3]);
+      const isRouteLike = isHtmlHandlerMethod(handlerMethod);
       const folderCandidates = buildFolderCandidates(
         basePaths,
         controllerRef,
         handlerMethod,
         parts[1]
       );
-      const hasApiStyleBasePath = basePaths.some((item) => isApiStylePath(item));
-      const clientEntry = hasApiStyleBasePath
-        ? undefined
-        : await resolveClientEntry(
+      const clientEntry = isRouteLike
+        ? await resolveClientEntry(
           basePaths,
           preferredFolderName,
           folderCandidates,
+          handlerMethod,
           token
-        );
+        )
+        : undefined;
       const clientRouteDefs = clientEntry
         ? await parseClientRoutes(clientEntry.fsPath, token)
         : [];
       const clientRoutes = buildLeafRoutes(basePaths, clientRouteDefs);
 
-      const type: RouteCatalogItemType = clientEntry ? 'page' : 'interface';
+      const type: RouteCatalogItemType = isRouteLike ? 'page' : 'interface';
 
       items.push({
         id: `route-${items.length + 1}`,
