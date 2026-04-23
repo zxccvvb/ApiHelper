@@ -19,6 +19,26 @@ export interface RouteTextHit {
   routerLine: number;
 }
 
+export interface ParsedRouteDefinition {
+  elements: string[];
+  methodIndex: number;
+  routeType: string | null;
+  httpMethod: string;
+  pathPart: string;
+  controllerPart: string;
+  controllerRef: string | null;
+  handlerPart: string;
+  handlerMethod: string | null;
+}
+
+export interface ParsedRouteBlock {
+  routeStart: number;
+  routeBlock: string;
+  route: ParsedRouteDefinition;
+}
+
+const HTTP_METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD']);
+
 async function findRouteFiles(
   token?: vscode.CancellationToken
 ): Promise<vscode.Uri[]> {
@@ -109,17 +129,6 @@ export async function findPathTextInRouteFiles(
   return undefined;
 }
 
-function findRouteStartBefore(content: string, pathIndex: number): number {
-  const before = content.slice(0, pathIndex);
-  let lastStart = -1;
-  const re = /\[\s*['"](GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)['"]/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(before)) !== null) {
-    lastStart = m.index;
-  }
-  return lastStart;
-}
-
 export function isHtmlHandlerMethod(handlerMethod: string | null | undefined): boolean {
   return !!handlerMethod && /html$/i.test(handlerMethod.trim());
 }
@@ -128,19 +137,11 @@ export function resolveRouteHandlerMethodAtIndex(
   content: string,
   index: number
 ): string | null {
-  const routeStart = findRouteStartBefore(content, index);
-  if (routeStart < 0) {
+  const hit = findParsedRouteAtIndex(content, index);
+  if (!hit) {
     return null;
   }
-  const routeStr = extractBalancedRoute(content, routeStart);
-  if (!routeStr) {
-    return null;
-  }
-  const parts = splitRouteElements(routeStr);
-  if (parts.length < 4) {
-    return null;
-  }
-  return extractHandlerMethod(parts[3]);
+  return hit.route.handlerMethod;
 }
 
 function normalizeFolderLookupKey(folderName: string): string {
@@ -261,6 +262,149 @@ export function splitRouteElements(routeInner: string): string[] {
   return parts;
 }
 
+function unquoteSimpleString(value: string): string | null {
+  const match = value.trim().match(/^['"`]([^'"`]+)['"`]$/);
+  return match ? match[1] : null;
+}
+
+function isHttpMethodPart(value: string): boolean {
+  const method = unquoteSimpleString(value);
+  return !!method && HTTP_METHODS.has(method.toUpperCase());
+}
+
+function findArrayAssignment(
+  routerFileContent: string,
+  identifier: string
+): string | null {
+  const assignRe = new RegExp(
+    `(?:const|let|var)\\s+${identifier}\\s*=\\s*\\[`,
+    'm'
+  );
+  const match = assignRe.exec(routerFileContent);
+  if (!match) {
+    return null;
+  }
+
+  const arrayStart = routerFileContent.indexOf('[', match.index);
+  if (arrayStart < 0) {
+    return null;
+  }
+
+  return extractBalancedRoute(routerFileContent, arrayStart);
+}
+
+function expandRouteElements(
+  elements: string[],
+  routerFileContent: string,
+  visited: Set<string> = new Set()
+): string[] {
+  const expanded: string[] = [];
+
+  for (const element of elements) {
+    const spreadMatch = element.trim().match(/^\.\.\.\s*([A-Za-z_$][\w$]*)$/);
+    if (!spreadMatch) {
+      expanded.push(element);
+      continue;
+    }
+
+    const identifier = spreadMatch[1];
+    if (visited.has(identifier)) {
+      expanded.push(element);
+      continue;
+    }
+
+    const assignedArray = findArrayAssignment(routerFileContent, identifier);
+    if (!assignedArray) {
+      expanded.push(element);
+      continue;
+    }
+
+    const nextVisited = new Set(visited);
+    nextVisited.add(identifier);
+    const assignedElements = splitRouteElements(assignedArray);
+    expanded.push(...expandRouteElements(assignedElements, routerFileContent, nextVisited));
+  }
+
+  return expanded;
+}
+
+export function parseRouteDefinition(
+  routeBlock: string,
+  routerFileContent: string
+): ParsedRouteDefinition | null {
+  const elements = expandRouteElements(splitRouteElements(routeBlock), routerFileContent);
+
+  let methodIndex = -1;
+  if (elements.length >= 4 && isHttpMethodPart(elements[0])) {
+    methodIndex = 0;
+  } else if (elements.length >= 5 && isHttpMethodPart(elements[1])) {
+    methodIndex = 1;
+  } else {
+    return null;
+  }
+
+  const httpMethod = unquoteSimpleString(elements[methodIndex]);
+  const pathPart = elements[methodIndex + 1];
+  const controllerPart = elements[methodIndex + 2];
+  const handlerPart = elements[methodIndex + 3];
+  if (!httpMethod || !pathPart || !controllerPart || !handlerPart) {
+    return null;
+  }
+
+  return {
+    elements,
+    methodIndex,
+    routeType: methodIndex === 1 ? unquoteSimpleString(elements[0]) : null,
+    httpMethod: httpMethod.toUpperCase(),
+    pathPart,
+    controllerPart,
+    controllerRef: resolveControllerRef(controllerPart, routerFileContent),
+    handlerPart,
+    handlerMethod: extractHandlerMethod(handlerPart)
+  };
+}
+
+export function collectParsedRouteBlocks(
+  routerFileContent: string
+): ParsedRouteBlock[] {
+  const routes: ParsedRouteBlock[] = [];
+
+  for (let i = 0; i < routerFileContent.length; i++) {
+    if (routerFileContent[i] !== '[') {
+      continue;
+    }
+
+    const routeBlock = extractBalancedRoute(routerFileContent, i);
+    if (!routeBlock) {
+      continue;
+    }
+
+    const route = parseRouteDefinition(routeBlock, routerFileContent);
+    if (!route) {
+      continue;
+    }
+
+    routes.push({
+      routeStart: i,
+      routeBlock,
+      route
+    });
+    i += routeBlock.length - 1;
+  }
+
+  return routes;
+}
+
+export function findParsedRouteAtIndex(
+  content: string,
+  index: number
+): ParsedRouteBlock | undefined {
+  return collectParsedRouteBlocks(content).find(({ routeStart, routeBlock }) => {
+    const routeEnd = routeStart + routeBlock.length;
+    return index >= routeStart && index < routeEnd;
+  });
+}
+
 export function resolveControllerRef(
   third: string,
   routerFileContent: string
@@ -308,7 +452,10 @@ export function controllerRefToDirAndBasename(
 ): { dir: string; fileBase: string } | null {
   const dot = controllerRef.lastIndexOf('.');
   if (dot <= 0) {
-    return null;
+    return {
+      dir: path.join(workspaceRoot, 'app', 'controllers'),
+      fileBase: controllerRef
+    };
   }
   const dir = controllerRef.slice(0, dot);
   const fileBase = controllerRef.slice(dot + 1);
@@ -404,55 +551,20 @@ export async function findRouteForPath(
 
   const routerFiles = await findRouteFiles(token);
 
-  const needle1 = `'${apiPath}'`;
-  const needle2 = `"${apiPath}"`;
-
   for (const uri of routerFiles) {
     if (token.isCancellationRequested) {
       return undefined;
     }
     const content = (await vscode.workspace.fs.readFile(uri)).toString();
-    let searchFrom = 0;
-    while (true) {
-      const i1 = content.indexOf(needle1, searchFrom);
-      const i2 = content.indexOf(needle2, searchFrom);
-      let idx = -1;
-      if (i1 >= 0 && i2 >= 0) {
-        idx = Math.min(i1, i2);
-      } else {
-        idx = Math.max(i1, i2);
-      }
-      if (idx < 0) {
-        break;
-      }
-
-      const routeStart = findRouteStartBefore(content, idx);
-      if (routeStart < 0) {
-        searchFrom = idx + 1;
-        continue;
-      }
-      const routeStr = extractBalancedRoute(content, routeStart);
-      if (!routeStr) {
-        searchFrom = idx + 1;
+    const parsedRoutes = collectParsedRouteBlocks(content);
+    for (const { routeStart, route } of parsedRoutes) {
+      if (!routePathPartMatchesApiPath(route.pathPart, apiPath)) {
         continue;
       }
 
-      const parts = splitRouteElements(routeStr);
-      if (parts.length < 4) {
-        searchFrom = idx + 1;
-        continue;
-      }
-
-      if (!routePathPartMatchesApiPath(parts[1], apiPath)) {
-        searchFrom = idx + 1;
-        continue;
-      }
-
-      const httpMethod = parts[0].replace(/^['"]|['"]$/g, '');
-      const controllerRef = resolveControllerRef(parts[2], content);
-      const handlerMethod = extractHandlerMethod(parts[3]);
+      const controllerRef = route.controllerRef;
+      const handlerMethod = route.handlerMethod;
       if (!controllerRef || !handlerMethod) {
-        searchFrom = idx + 1;
         continue;
       }
 
@@ -462,7 +574,6 @@ export async function findRouteForPath(
         token
       );
       if (!controllerFs) {
-        searchFrom = idx + 1;
         continue;
       }
       const controllerUri = vscode.Uri.file(controllerFs);
@@ -477,7 +588,7 @@ export async function findRouteForPath(
         routerLine: routeLine,
         controllerUri,
         handlerLine,
-        httpMethod
+        httpMethod: route.httpMethod
       };
     }
   }
@@ -600,25 +711,14 @@ export async function findRouteForFolderName(
       return undefined;
     }
     const content = (await vscode.workspace.fs.readFile(uri)).toString();
-    const routeStartRe = /\[\s*['"](GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)['"]/gi;
-    let startMatch: RegExpExecArray | null;
-    while ((startMatch = routeStartRe.exec(content)) !== null) {
-      const routeStart = startMatch.index;
-      const routeStr = extractBalancedRoute(content, routeStart);
-      if (!routeStr) {
-        continue;
-      }
-      const parts = splitRouteElements(routeStr);
-      if (parts.length < 4) {
-        continue;
-      }
-      if (!routePathPartMatchesFolderName(parts[1], folderName)) {
+    for (const { routeStart, route } of collectParsedRouteBlocks(content)) {
+      if (!routePathPartMatchesFolderName(route.pathPart, folderName)) {
         continue;
       }
 
-      const httpMethod = parts[0].replace(/^['"]|['"]$/g, '');
-      const controllerRef = resolveControllerRef(parts[2], content);
-      const handlerMethod = extractHandlerMethod(parts[3]);
+      const httpMethod = route.httpMethod;
+      const controllerRef = route.controllerRef;
+      const handlerMethod = route.handlerMethod;
       if (!controllerRef || !handlerMethod) {
         continue;
       }
@@ -634,7 +734,7 @@ export async function findRouteForFolderName(
       const ctrlContent = (await vscode.workspace.fs.readFile(controllerUri)).toString();
       const handlerLine = findHandlerLine(ctrlContent, handlerMethod);
       const routeLine = content.slice(0, routeStart).split('\n').length;
-      const score = calcFolderRouteScore(parts[1], httpMethod, handlerMethod);
+      const score = calcFolderRouteScore(route.pathPart, httpMethod, handlerMethod);
 
       const candidate: NodeRouteHit & { score: number } = {
         routerUri: uri,
@@ -674,34 +774,25 @@ export async function findRouteForControllerDirName(
 
   let best: (NodeRouteHit & { score: number }) | undefined;
   const prefix = `${folderName}.`;
+  const normalizedFolderName = normalizeFolderLookupKey(folderName);
 
   for (const uri of routerFiles) {
     if (token.isCancellationRequested) {
       return undefined;
     }
     const content = (await vscode.workspace.fs.readFile(uri)).toString();
-    const routeStartRe = /\[\s*['"](GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)['"]/gi;
-    let startMatch: RegExpExecArray | null;
-    while ((startMatch = routeStartRe.exec(content)) !== null) {
-      const routeStart = startMatch.index;
-      const routeStr = extractBalancedRoute(content, routeStart);
-      if (!routeStr) {
-        continue;
-      }
-      const parts = splitRouteElements(routeStr);
-      if (parts.length < 4) {
-        continue;
-      }
-      const controllerQuoted = parts[2].trim();
-      const cq = controllerQuoted.match(/^['"]([^'"]+)['"]$/);
-      const controllerPlain = cq ? cq[1] : '';
-      if (!controllerPlain.startsWith(prefix)) {
+    for (const { routeStart, route } of collectParsedRouteBlocks(content)) {
+      const controllerPlain = route.controllerRef || '';
+      const matchesDotStyle = controllerPlain.startsWith(prefix);
+      const matchesFlatStyle =
+        normalizeFolderLookupKey(controllerPlain.replace(/Controller$/i, '')) === normalizedFolderName;
+      if (!matchesDotStyle && !matchesFlatStyle) {
         continue;
       }
 
-      const httpMethod = parts[0].replace(/^['"]|['"]$/g, '');
-      const controllerRef = resolveControllerRef(parts[2], content);
-      const handlerMethod = extractHandlerMethod(parts[3]);
+      const httpMethod = route.httpMethod;
+      const controllerRef = route.controllerRef;
+      const handlerMethod = route.handlerMethod;
       if (!controllerRef || !handlerMethod) {
         continue;
       }
@@ -717,7 +808,7 @@ export async function findRouteForControllerDirName(
       const ctrlContent = (await vscode.workspace.fs.readFile(controllerUri)).toString();
       const handlerLine = findHandlerLine(ctrlContent, handlerMethod);
       const routeLine = content.slice(0, routeStart).split('\n').length;
-      const score = calcFolderRouteScore(parts[1], httpMethod, handlerMethod);
+      const score = calcFolderRouteScore(route.pathPart, httpMethod, handlerMethod);
 
       const candidate: NodeRouteHit & { score: number } = {
         routerUri: uri,

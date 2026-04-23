@@ -1,24 +1,10 @@
 import * as vscode from 'vscode';
 import { expandToQuotedString, isAppRouterFile } from './editorPathExtract';
 import {
-  extractBalancedRoute,
-  extractHandlerMethod,
+  findParsedRouteAtIndex,
   findHandlerLine,
-  resolveControllerRef,
-  resolveExistingControllerPath,
-  splitRouteElements
+  resolveExistingControllerPath
 } from './nodeRouteResolve';
-
-function findRouteStartBefore(content: string, index: number): number {
-  const before = content.slice(0, index);
-  let lastStart = -1;
-  const re = /\[\s*['"](GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)['"]/gi;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(before)) !== null) {
-    lastStart = match.index;
-  }
-  return lastStart;
-}
 
 /**
  * 在 app/routers 中点击 Controller 引用或 handler 方法名字符串时：
@@ -46,23 +32,15 @@ export async function resolveRouterDirectHandler(
     return undefined;
   }
   const fullContent = document.getText();
-  const routeStart = findRouteStartBefore(
+  const routeHit = findParsedRouteAtIndex(
     fullContent,
     document.offsetAt(expand.start)
   );
-  if (routeStart < 0) {
+  if (!routeHit) {
     return undefined;
   }
-  const routeStr = extractBalancedRoute(fullContent, routeStart);
-  if (!routeStr) {
-    return undefined;
-  }
-  const parts = splitRouteElements(routeStr);
-  if (parts.length < 4) {
-    return undefined;
-  }
-  const controllerRef = resolveControllerRef(parts[2], fullContent);
-  const handlerMethod = extractHandlerMethod(parts[3]);
+  const controllerRef = routeHit.route.controllerRef;
+  const handlerMethod = routeHit.route.handlerMethod;
   if (!controllerRef || !handlerMethod) {
     return undefined;
   }

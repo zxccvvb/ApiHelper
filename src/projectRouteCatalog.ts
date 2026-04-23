@@ -6,11 +6,8 @@ import {
   inferFolderNamesFromApiPath
 } from './clientRouteResolve';
 import {
-  extractBalancedRoute,
-  extractHandlerMethod,
-  isHtmlHandlerMethod,
-  resolveControllerRef,
-  splitRouteElements
+  collectParsedRouteBlocks,
+  isHtmlHandlerMethod
 } from './nodeRouteResolve';
 
 export type RouteCatalogItemType = 'page' | 'interface';
@@ -46,7 +43,6 @@ export interface RouteCatalogResult {
   items: RouteCatalogItem[];
 }
 
-const HTTP_METHOD_RE = /\[\s*['"](GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)['"]/gi;
 const ROUTER_CATALOG_GLOB = '**/app/routers/**/*.js';
 
 function getWorkspaceRoot(): { root: string; name: string } | null {
@@ -108,7 +104,7 @@ function extractControllerFolder(controllerRef: string | null): string | undefin
   }
   const dotIndex = controllerRef.lastIndexOf('.');
   if (dotIndex <= 0) {
-    return undefined;
+    return controllerRef.replace(/Controller$/i, '') || undefined;
   }
   return controllerRef.slice(0, dotIndex);
 }
@@ -404,38 +400,24 @@ export async function scanProjectRouteCatalog(
     const routerRelativePath = vscode.workspace.asRelativePath(routerUri);
     const preferredFolderName = path.basename(routerFsPath, path.extname(routerFsPath));
     const routerContent = (await vscode.workspace.fs.readFile(routerUri)).toString();
-    const routeStartRe = new RegExp(HTTP_METHOD_RE.source, HTTP_METHOD_RE.flags);
-
-    let routeMatch: RegExpExecArray | null;
-    while ((routeMatch = routeStartRe.exec(routerContent)) !== null) {
+    for (const { routeStart, route } of collectParsedRouteBlocks(routerContent)) {
       if (token?.isCancellationRequested) {
         break;
       }
 
-      const routeStart = routeMatch.index;
-      const routeBlock = extractBalancedRoute(routerContent, routeStart);
-      if (!routeBlock) {
-        continue;
-      }
-
-      const parts = splitRouteElements(routeBlock);
-      if (parts.length < 4) {
-        continue;
-      }
-
-      const basePaths = extractBasePaths(parts[1]);
+      const basePaths = extractBasePaths(route.pathPart);
       if (!basePaths.length) {
         continue;
       }
 
-      const controllerRef = resolveControllerRef(parts[2], routerContent);
-      const handlerMethod = extractHandlerMethod(parts[3]);
+      const controllerRef = route.controllerRef;
+      const handlerMethod = route.handlerMethod;
       const isRouteLike = isHtmlHandlerMethod(handlerMethod);
       const folderCandidates = buildFolderCandidates(
         basePaths,
         controllerRef,
         handlerMethod,
-        parts[1]
+        route.pathPart
       );
       const clientEntry = isRouteLike
         ? await resolveClientEntry(
@@ -456,7 +438,7 @@ export async function scanProjectRouteCatalog(
       items.push({
         id: `route-${items.length + 1}`,
         type,
-        httpMethod: parts[0].replace(/^['"`]|['"`]$/g, ''),
+        httpMethod: route.httpMethod,
         basePaths,
         routerFsPath,
         routerRelativePath,
