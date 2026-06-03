@@ -4,6 +4,7 @@ import {
   extractApiPath,
   extractRouteFolderName,
   getApiPathAtPosition,
+  isApiLikePath,
   isAppRouterFile,
   normalizePath,
   parseApiPathFromInput
@@ -28,7 +29,7 @@ const DEFINITION_SELECTOR: vscode.DocumentSelector = [
 
 function inferRouterFileFolderName(document: vscode.TextDocument): string | undefined {
   const fsPath = document.uri.fsPath.replace(/\\/g, '/');
-  const m = fsPath.match(/\/app\/routers\/([^/]+)\.(js|ts)$/);
+  const m = fsPath.match(/\/app\/routers\/(.+)\.(js|ts)$/);
   return m?.[1];
 }
 
@@ -110,13 +111,17 @@ export function activate(context: vscode.ExtensionContext): void {
           return [link];
         }
 
-        const line = Math.max(0, found.routerLine - 1);
+        const jumpToController = isAppRouterFile(document);
+        const targetUri = jumpToController ? found.controllerUri : found.routerUri;
+        const line = jumpToController
+          ? Math.max(0, found.handlerLine - 1)
+          : Math.max(0, found.routerLine - 1);
         const targetPos = new vscode.Position(line, 0);
         const targetRange = new vscode.Range(targetPos, targetPos);
 
         const link: vscode.LocationLink = {
           originSelectionRange: hit.originRange,
-          targetUri: found.routerUri,
+          targetUri,
           targetRange,
           targetSelectionRange: targetRange
         };
@@ -168,10 +173,16 @@ export function activate(context: vscode.ExtensionContext): void {
 
         progress.report({ increment: 100 });
 
-        const routerPos = new vscode.Position(found.routerLine - 1, 0);
-        await openAt(found.routerUri, routerPos);
+        const editor = vscode.window.activeTextEditor;
+        const jumpToController = editor ? isAppRouterFile(editor.document) : false;
+        const targetUri = jumpToController ? found.controllerUri : found.routerUri;
+        const targetLine = jumpToController ? found.handlerLine : found.routerLine;
+        const targetPos = new vscode.Position(targetLine - 1, 0);
+        await openAt(targetUri, targetPos);
         void vscode.window.showInformationMessage(
-          `ApiHelper: 已定位路由 ${found.httpMethod} ${sourceLabel}`
+          jumpToController
+            ? `ApiHelper: 已定位 Controller ${found.httpMethod} ${sourceLabel}`
+            : `ApiHelper: 已定位路由 ${found.httpMethod} ${sourceLabel}`
         );
       }
     );
@@ -199,6 +210,9 @@ export function activate(context: vscode.ExtensionContext): void {
       if (apiPath) {
         const skipV2Warning =
           apiPath.startsWith('/wscump/') ||
+          apiPath.startsWith('/pay/') ||
+          apiPath.startsWith('/wsctrade/') ||
+          isApiLikePath(apiPath) ||
           (editor && isAppRouterFile(editor.document));
         if (!apiPath.startsWith('/v2/') && !skipV2Warning) {
           const ok = await vscode.window.showWarningMessage(

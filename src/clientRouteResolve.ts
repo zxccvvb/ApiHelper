@@ -67,6 +67,30 @@ export function inferFolderNamesFromApiPath(apiPath: string): string[] {
     for (let i = 2; i < segments.length; i++) {
       candidates.push(segments.slice(i).join('/'));
     }
+  } else if (
+    segments.length >= 4 &&
+    segments[0] === 'pay' &&
+    segments[1] === 'wsctrade' &&
+    segments[2] === 'order'
+  ) {
+    candidates.push(segments.slice(2, 4).join('/'));
+    candidates.push(segments[3]);
+    for (let i = 2; i < segments.length; i++) {
+      candidates.push(segments.slice(i).join('/'));
+    }
+  } else if (segments.length >= 2 && segments[0] === 'pay' && segments[1]?.startsWith('wsctrade_')) {
+    const bare = segments[1].replace(/^wsctrade_/, '');
+    candidates.push(bare);
+    const tail = bare.split('_').pop();
+    if (tail) {
+      candidates.push(tail);
+    }
+  } else if (segments.length >= 3 && segments[0] === 'wsctrade' && segments[1] === 'order') {
+    candidates.push(segments.slice(1, 3).join('/'));
+    candidates.push(segments[2]);
+    for (let i = 1; i < segments.length; i++) {
+      candidates.push(segments.slice(i).join('/'));
+    }
   } else if (segments.length >= 2) {
     for (let i = 1; i < segments.length; i++) {
       candidates.push(segments.slice(i).join('/'));
@@ -121,22 +145,34 @@ export async function findClientEntryByFolderName(
     return null;
   }
   const root = folders[0].uri.fsPath;
-  const candidates = ['app.tsx', 'app.jsx', 'app.ts', 'app.js', 'main.tsx', 'main.jsx', 'main.ts', 'main.js'];
+  const entryFiles = [
+    'app.tsx',
+    'app.jsx',
+    'app.ts',
+    'app.js',
+    'main.tsx',
+    'main.jsx',
+    'main.ts',
+    'main.js'
+  ];
+  const clientRoots = ['route', 'pages'];
 
   for (const folderVariant of expandFolderNameVariants(folderName)) {
-    for (const fileName of candidates) {
-      if (token?.isCancellationRequested) {
-        return null;
-      }
-      const fsPath = path.join(root, 'client', 'route', folderVariant, fileName);
-      const uri = vscode.Uri.file(fsPath);
-      try {
-        const st = await vscode.workspace.fs.stat(uri);
-        if (st.type === vscode.FileType.File) {
-          return uri;
+    for (const clientRoot of clientRoots) {
+      for (const fileName of entryFiles) {
+        if (token?.isCancellationRequested) {
+          return null;
         }
-      } catch {
-        // try next candidate
+        const fsPath = path.join(root, 'client', clientRoot, folderVariant, fileName);
+        const uri = vscode.Uri.file(fsPath);
+        try {
+          const st = await vscode.workspace.fs.stat(uri);
+          if (st.type === vscode.FileType.File) {
+            return uri;
+          }
+        } catch {
+          // try next candidate
+        }
       }
     }
   }

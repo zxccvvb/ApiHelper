@@ -182,6 +182,30 @@ function collectRouteFolderCandidates(routePath: string): string[] {
     }
   }
 
+  if (segments[0] === 'pay' && segments[1] === 'wsctrade' && segments[2] === 'order' && segments[3]) {
+    push(segments.slice(2, 4).join('/'));
+    push(segments[3]);
+    for (let i = 2; i < segments.length; i++) {
+      push(segments.slice(i).join('/'));
+    }
+  }
+
+  if (segments[0] === 'pay' && segments[1]?.startsWith('wsctrade_')) {
+    const bare = segments[1].replace(/^wsctrade_/, '');
+    push(bare);
+    if (bare.includes('_')) {
+      push(bare.split('_').pop() || bare);
+    }
+  }
+
+  if (segments[0] === 'wsctrade' && segments[1] === 'order' && segments[2]) {
+    push(segments.slice(1, 3).join('/'));
+    push(segments[2]);
+    for (let i = 1; i < segments.length; i++) {
+      push(segments.slice(i).join('/'));
+    }
+  }
+
   return [...new Set(candidates)];
 }
 
@@ -277,7 +301,7 @@ function findArrayAssignment(
   identifier: string
 ): string | null {
   const assignRe = new RegExp(
-    `(?:const|let|var)\\s+${identifier}\\s*=\\s*\\[`,
+    `(?:const|let|var|export)\\s+${identifier}\\s*=\\s*\\[`,
     'm'
   );
   const match = assignRe.exec(routerFileContent);
@@ -621,27 +645,33 @@ function microAppArgToRelativePath(arg: string): string {
   return m ? m[1] : arg;
 }
 
+/** 从路由 path 段解析出全部绝对路径（字符串、路径数组或 registerApp） */
+export function collectPathsFromPathPart(pathPart: string): string[] {
+  const t = pathPart.trim();
+  const simple = t.match(/^['"]([^'"]+)['"]$/);
+  if (simple) {
+    return [simple[1]];
+  }
+  if (t.startsWith('[')) {
+    return collectQuotedAbsolutePaths(t);
+  }
+  if (/registerApp\s*\(/.test(t)) {
+    return collectQuotedAbsolutePaths(t);
+  }
+  return [];
+}
+
 /**
- * 路由数组第二项：普通路径字符串或 `registerApp('@scope/app-path', ['/a', '/b'])`
+ * 路由数组第二项：普通路径字符串、路径数组或 `registerApp('@scope/app-path', ['/a', '/b'])`
  */
 export function routePathPartMatchesApiPath(
   pathPart: string,
   apiPath: string
 ): boolean {
   const want = normalizeRouteComparePath(apiPath);
-  const t = pathPart.trim();
-  const simple = t.match(/^['"]([^'"]+)['"]$/);
-  if (simple) {
-    return normalizeRouteComparePath(simple[1]) === want;
-  }
-  if (/registerApp\s*\(/.test(t)) {
-    for (const p of collectQuotedAbsolutePaths(t)) {
-      if (normalizeRouteComparePath(p) === want) {
-        return true;
-      }
-    }
-  }
-  return false;
+  return collectPathsFromPathPart(pathPart).some(
+    (p) => normalizeRouteComparePath(p) === want
+  );
 }
 
 export function routePathPartMatchesFolderName(
@@ -650,10 +680,6 @@ export function routePathPartMatchesFolderName(
 ): boolean {
   const want = normalizeFolderLookupKey(folderName);
   const t = pathPart.trim();
-  const simple = t.match(/^['"]([^'"]+)['"]$/);
-  if (simple) {
-    return routePathMatchesFolderName(simple[1], folderName);
-  }
   if (/registerApp\s*\(/.test(t)) {
     const firstArgM = t.match(/registerApp\s*\(\s*['"]([^'"]+)['"]/);
     if (firstArgM) {
@@ -666,10 +692,10 @@ export function routePathPartMatchesFolderName(
         return true;
       }
     }
-    for (const p of collectQuotedAbsolutePaths(t)) {
-      if (routePathMatchesFolderName(p, folderName)) {
-        return true;
-      }
+  }
+  for (const p of collectPathsFromPathPart(pathPart)) {
+    if (routePathMatchesFolderName(p, folderName)) {
+      return true;
     }
   }
   return false;

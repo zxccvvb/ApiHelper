@@ -43,7 +43,7 @@ export interface RouteCatalogResult {
   items: RouteCatalogItem[];
 }
 
-const ROUTER_CATALOG_GLOB = '**/app/routers/**/*.js';
+const ROUTER_CATALOG_GLOB = '**/app/routers/**/*.{js,ts}';
 
 function getWorkspaceRoot(): { root: string; name: string } | null {
   const folders = vscode.workspace.workspaceFolders;

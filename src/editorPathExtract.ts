@@ -14,8 +14,16 @@ export function normalizePath(p: string): string {
   return s;
 }
 
+/** wsc-h5-trade 等项目的 BFF 路径前缀（/pay/、/wsctrade/ 等） */
+export function isApiLikePath(value: string): boolean {
+  const t = value.trim();
+  return /^\/(?:v2|wscump|pay|wsctrade)(?:\/|$)/.test(t);
+}
+
 function extractApiLikeLiteral(value: string): string | undefined {
-  const matches = [...value.matchAll(/['"`](\/(?:v2|wscump)\/[^'"`]*)['"`]/g)];
+  const matches = [
+    ...value.matchAll(/['"`](\/(?:v2|wscump|pay|wsctrade)[^'"`]*)['"`]/g)
+  ];
   return matches[0]?.[1];
 }
 
@@ -165,11 +173,7 @@ export function getApiPathAtPosition(
     const value = um[2];
     const valueStart = line.indexOf(value, um.index);
     const valueEnd = valueStart + value.length;
-    if (
-      col >= valueStart &&
-      col <= valueEnd &&
-      value.includes('/v2/')
-    ) {
+    if (col >= valueStart && col <= valueEnd && isApiLikePath(value)) {
       return {
         apiPath: normalizePath(value),
         originRange: new vscode.Range(
@@ -185,7 +189,7 @@ export function getApiPathAtPosition(
   const expand = expandToQuotedString(doc, pos);
   if (expand) {
     const t = doc.getText(expand).trim();
-    if (t.includes('/v2/')) {
+    if (isApiLikePath(t)) {
       return {
         apiPath: normalizePath(t),
         originRange: expand
@@ -242,7 +246,7 @@ export function extractApiPath(editor: vscode.TextEditor): string | undefined {
     return normalizePath(urlProp[1]);
   }
 
-  const quoted = line.match(/['"](\/v2\/[^'"]+)['"]/);
+  const quoted = line.match(/['"](\/(?:v2|pay|wsctrade|wscump)\/[^'"]+)['"]/);
   if (quoted) {
     return normalizePath(quoted[1]);
   }
@@ -264,16 +268,15 @@ export function extractApiPath(editor: vscode.TextEditor): string | undefined {
 }
 
 /**
- * 从当前文件路径提取 client/route 下的「应用路径」（相对 route 目录，可含多级目录）。
- * 例如 financial-statement/app.tsx → financial-statement；
- * life/business-overview/foo.tsx → life/business-overview
+ * 从当前文件路径提取前端页面目录名（相对 client/route 或 client/pages）。
+ * 例如 client/pages/order/buy/main.js → order/buy
  */
 export function extractRouteFolderName(
   editor: vscode.TextEditor
 ): string | undefined {
   const fsPath = editor.document.uri.fsPath.replace(/\\/g, '/');
   const m = fsPath.match(
-    /\/client\/route\/((?:[^/]+(?:\/[^/]+)*))\/[^/]+\.(tsx|jsx|ts|js)$/
+    /\/client\/(?:route|pages)\/((?:[^/]+(?:\/[^/]+)*))\/[^/]+\.(tsx|jsx|ts|js|vue)$/
   );
   return m?.[1];
 }
